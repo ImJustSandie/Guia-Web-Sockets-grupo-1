@@ -1,7 +1,8 @@
 using System;
+using Unity.Netcode;
 using UnityEngine;
 
-public class InteractableCube : MonoBehaviour
+public class InteractableCube : NetworkBehaviour
 {
     [SerializeField] private Vector3 holdOffset = new Vector3(0f, 1f, 1.5f);
     [SerializeField] private float interactionRange = 1.3f;
@@ -150,22 +151,98 @@ public class InteractableCube : MonoBehaviour
         if (Vector3.Distance(transform.position, player.transform.position) > maxPickupDistance) return false;
         if (solidCollider == null) return false;
 
-        isCarried = true;
-        carrier = player.transform;
-        Physics.IgnoreCollision(playerCollider, solidCollider, true);
-        if (cubeRigidbody != null)
+        if (IsServer)
         {
-            cubeRigidbody.linearVelocity = Vector3.zero;
-            cubeRigidbody.angularVelocity = Vector3.zero;
-            cubeRigidbody.isKinematic = true;
-            cubeRigidbody.useGravity = false;
+            PerformPickUp(player.NetworkObjectId);
         }
-        SetGrounded(false);
-        PublishCubeState(true);
+        else
+        {
+            RequestPickUpServerRpc(player.NetworkObjectId);
+        }
         return true;
     }
 
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void RequestPickUpServerRpc(ulong playerNetworkObjectId)
+    {
+        PerformPickUp(playerNetworkObjectId);
+    }
+
+    private void PerformPickUp(ulong playerNetworkObjectId)
+    {
+        if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(playerNetworkObjectId, out NetworkObject playerObj))
+        {
+            isCarried = true;
+            carrier = playerObj.transform;
+
+            var playerMgr = playerObj.GetComponent<PlayerMovementManager>();
+            if (playerMgr != null)
+            {
+                Collider pCol = playerObj.GetComponent<Collider>();
+                if (pCol != null && solidCollider != null)
+                {
+                    Physics.IgnoreCollision(pCol, solidCollider, true);
+                }
+            }
+
+            if (cubeRigidbody != null)
+            {
+                cubeRigidbody.linearVelocity = Vector3.zero;
+                cubeRigidbody.angularVelocity = Vector3.zero;
+                cubeRigidbody.isKinematic = true;
+                cubeRigidbody.useGravity = false;
+            }
+            SetGrounded(false);
+            PublishCubeState(true);
+            NotifyPickUpClientRpc(playerNetworkObjectId);
+        }
+    }
+
+    [Rpc(SendTo.NotServer)]
+    private void NotifyPickUpClientRpc(ulong playerNetworkObjectId)
+    {
+        if (IsServer) return; // Ya procesado en el servidor
+
+        if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(playerNetworkObjectId, out NetworkObject playerObj))
+        {
+            isCarried = true;
+            carrier = playerObj.transform;
+
+            Collider pCol = playerObj.GetComponent<Collider>();
+            if (pCol != null && solidCollider != null)
+            {
+                Physics.IgnoreCollision(pCol, solidCollider, true);
+            }
+
+            if (cubeRigidbody != null)
+            {
+                cubeRigidbody.isKinematic = true;
+                cubeRigidbody.useGravity = false;
+            }
+            SetGrounded(false);
+            PublishCubeState(true);
+        }
+    }
+
     public void Drop()
+    {
+        if (IsServer)
+        {
+            PerformDrop();
+        }
+        else
+        {
+            RequestDropServerRpc();
+        }
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void RequestDropServerRpc()
+    {
+        PerformDrop();
+    }
+
+    private void PerformDrop()
     {
         if (isCarried && playerCollider != null && solidCollider != null)
             Physics.IgnoreCollision(playerCollider, solidCollider, false);
@@ -179,6 +256,28 @@ public class InteractableCube : MonoBehaviour
             cubeRigidbody.useGravity = true;
             cubeRigidbody.linearVelocity = Vector3.zero;
             cubeRigidbody.angularVelocity = Vector3.zero;
+        }
+
+        RefreshGroundedState(cubeRigidbody == null);
+        PublishCubeState(true);
+        NotifyDropClientRpc();
+    }
+
+    [Rpc(SendTo.NotServer)]
+    private void NotifyDropClientRpc()
+    {
+        if (IsServer) return;
+
+        if (isCarried && playerCollider != null && solidCollider != null)
+            Physics.IgnoreCollision(playerCollider, solidCollider, false);
+
+        isCarried = false;
+        carrier = null;
+
+        if (cubeRigidbody != null)
+        {
+            cubeRigidbody.isKinematic = false;
+            cubeRigidbody.useGravity = true;
         }
 
         RefreshGroundedState(cubeRigidbody == null);

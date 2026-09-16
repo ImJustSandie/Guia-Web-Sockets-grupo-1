@@ -1,10 +1,11 @@
 using System;
+using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
-public class PlayerMovementManager : MonoBehaviour
+public class PlayerMovementManager : NetworkBehaviour
 {
     [SerializeField] private InputActionAsset actionsAsset;
     [SerializeField] private float moveSpeed = 5f;
@@ -42,24 +43,58 @@ public class PlayerMovementManager : MonoBehaviour
     private PlayerNetworkState lastPublishedPlayerState;
     private bool hasPublishedPlayerState;
 
+    public override void OnNetworkSpawn()
+    {
+        base.OnNetworkSpawn();
+        if (IsOwner)
+        {
+            SetupInputActions();
+        }
+        else
+        {
+            // Desactivar cámara local si está como hija o asociada a este avatar no-local
+            Camera cam = GetComponentInChildren<Camera>();
+            if (cam != null) cam.enabled = false;
+
+            AudioListener listener = GetComponentInChildren<AudioListener>();
+            if (listener != null) listener.enabled = false;
+
+            // Desactivar CharacterController en instancias remotas para que
+            // ClientNetworkTransform sincronice la posición sin conflictos.
+            CharacterController cc = GetComponent<CharacterController>();
+            if (cc != null) cc.enabled = false;
+        }
+    }
+
     private void OnEnable()
     {
         if (interactButton != null)
             interactButton.onClick.AddListener(OnInteractButtonPressed);
 
+        if (IsSpawned && IsOwner)
+        {
+            SetupInputActions();
+        }
+    }
+
+    private void SetupInputActions()
+    {
         if (actionsAsset == null)
         {
             Debug.LogWarning($"{name}: asignar InputSystem_Actions a actionsAsset en el Inspector.");
             return;
         }
 
-        moveAction = actionsAsset.FindAction("Player/Move");
-        interactAction = actionsAsset.FindAction("Player/Interact");
+        if (moveAction == null)
+            moveAction = actionsAsset.FindAction("Player/Move");
+        if (interactAction == null)
+            interactAction = actionsAsset.FindAction("Player/Interact");
 
         moveAction?.Enable();
         if (interactAction != null)
         {
             interactAction.Enable();
+            interactAction.performed -= HandleInteract;
             interactAction.performed += HandleInteract;
         }
     }
@@ -87,8 +122,28 @@ public class PlayerMovementManager : MonoBehaviour
         }
     }
 
+    [SerializeField] private float gravity = -9.81f;
+    private float verticalVelocity;
+
     private void Update()
     {
+        if (!IsOwner) return;
+
+        CharacterController cc = GetComponent<CharacterController>();
+
+        // Aplicar Gravedad
+        if (cc != null && cc.enabled)
+        {
+            if (cc.isGrounded && verticalVelocity < 0f)
+            {
+                verticalVelocity = -2f; // Mantener al jugador pegado al suelo
+            }
+            else
+            {
+                verticalVelocity += gravity * Time.deltaTime;
+            }
+        }
+
         Vector2 input = Vector2.zero;
 
         if (moveAction != null && moveAction.enabled)
@@ -100,11 +155,6 @@ public class PlayerMovementManager : MonoBehaviour
         bool moving = input.sqrMagnitude >= 0.0001f;
         SetIsMoving(moving);
         RefreshCarryingState();
-        if (!moving)
-        {
-            PublishPlayerState();
-            return;
-        }
 
         Transform cam = cameraTransform;
         if (cam == null && Camera.main != null)
@@ -131,15 +181,20 @@ public class PlayerMovementManager : MonoBehaviour
 
         Vector3 direction = right * input.x + forward * input.y;
         if (direction.sqrMagnitude > 1f) direction.Normalize();
-        if (direction.sqrMagnitude < 0.0001f)
+
+        Vector3 velocity = direction * moveSpeed;
+        velocity.y = verticalVelocity;
+
+        if (cc != null && cc.enabled)
         {
-            PublishPlayerState();
-            return;
+            cc.Move(velocity * Time.deltaTime);
+        }
+        else
+        {
+            transform.position += velocity * Time.deltaTime;
         }
 
-        transform.position += direction * (moveSpeed * Time.deltaTime);
-
-        if (faceMoveDirection)
+        if (moving && faceMoveDirection && direction.sqrMagnitude >= 0.0001f)
         {
             Quaternion targetRotation = Quaternion.LookRotation(direction);
             transform.rotation = Quaternion.Slerp(
