@@ -147,7 +147,6 @@ public class InteractableCube : NetworkBehaviour
     public bool TryPickUp(PlayerMovementManager player)
     {
         if (isCarried || player == null) return false;
-        if (playerCollider == null) return false;
         if (Vector3.Distance(transform.position, player.transform.position) > maxPickupDistance) return false;
         if (solidCollider == null) return false;
 
@@ -170,20 +169,16 @@ public class InteractableCube : NetworkBehaviour
 
     private void PerformPickUp(ulong playerNetworkObjectId)
     {
+        // Si ya está siendo cargado, ignorar
+        if (isCarried) return;
+
         if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(playerNetworkObjectId, out NetworkObject playerObj))
         {
             isCarried = true;
             carrier = playerObj.transform;
 
-            var playerMgr = playerObj.GetComponent<PlayerMovementManager>();
-            if (playerMgr != null)
-            {
-                Collider pCol = playerObj.GetComponent<Collider>();
-                if (pCol != null && solidCollider != null)
-                {
-                    Physics.IgnoreCollision(pCol, solidCollider, true);
-                }
-            }
+            // Ignorar colisión entre el jugador y el cubo sólido
+            IgnorePlayerCollision(playerObj, true);
 
             if (cubeRigidbody != null)
             {
@@ -198,6 +193,17 @@ public class InteractableCube : NetworkBehaviour
         }
     }
 
+    /// <summary>Ignora o restaura colisiones entre todos los colliders del jugador y el solidCollider del cubo.</summary>
+    private void IgnorePlayerCollision(NetworkObject playerObj, bool ignore)
+    {
+        if (solidCollider == null) return;
+        foreach (Collider col in playerObj.GetComponentsInChildren<Collider>())
+        {
+            if (!col.isTrigger)
+                Physics.IgnoreCollision(col, solidCollider, ignore);
+        }
+    }
+
     [Rpc(SendTo.NotServer)]
     private void NotifyPickUpClientRpc(ulong playerNetworkObjectId)
     {
@@ -208,11 +214,7 @@ public class InteractableCube : NetworkBehaviour
             isCarried = true;
             carrier = playerObj.transform;
 
-            Collider pCol = playerObj.GetComponent<Collider>();
-            if (pCol != null && solidCollider != null)
-            {
-                Physics.IgnoreCollision(pCol, solidCollider, true);
-            }
+            IgnorePlayerCollision(playerObj, true);
 
             if (cubeRigidbody != null)
             {
@@ -244,8 +246,22 @@ public class InteractableCube : NetworkBehaviour
 
     private void PerformDrop()
     {
-        if (isCarried && playerCollider != null && solidCollider != null)
-            Physics.IgnoreCollision(playerCollider, solidCollider, false);
+        if (!isCarried) return;
+
+        // Restaurar colisiones con el carrier
+        if (carrier != null)
+        {
+            NetworkObject carrierObj = carrier.GetComponent<NetworkObject>();
+            if (carrierObj != null)
+                IgnorePlayerCollision(carrierObj, false);
+        }
+
+        ulong carrierNetObjId = 0;
+        if (carrier != null)
+        {
+            var nObj = carrier.GetComponent<NetworkObject>();
+            if (nObj != null) carrierNetObjId = nObj.NetworkObjectId;
+        }
 
         isCarried = false;
         carrier = null;
@@ -260,16 +276,20 @@ public class InteractableCube : NetworkBehaviour
 
         RefreshGroundedState(cubeRigidbody == null);
         PublishCubeState(true);
-        NotifyDropClientRpc();
+        NotifyDropClientRpc(carrierNetObjId);
     }
 
     [Rpc(SendTo.NotServer)]
-    private void NotifyDropClientRpc()
+    private void NotifyDropClientRpc(ulong carrierNetworkObjectId)
     {
         if (IsServer) return;
 
-        if (isCarried && playerCollider != null && solidCollider != null)
-            Physics.IgnoreCollision(playerCollider, solidCollider, false);
+        // Restaurar colisiones con el carrier en el cliente
+        if (carrierNetworkObjectId != 0 &&
+            NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(carrierNetworkObjectId, out NetworkObject carrierObj))
+        {
+            IgnorePlayerCollision(carrierObj, false);
+        }
 
         isCarried = false;
         carrier = null;
