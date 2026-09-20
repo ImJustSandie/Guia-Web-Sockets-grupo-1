@@ -40,6 +40,35 @@ public class ConnectionUIHandler : MonoBehaviour
         Debug.Log($"[ConnectionUIHandler] IP de conexión configurada a: {targetIP}:{port}");
     }
 
+    private void Start()
+    {
+        if (NetworkManager.Singleton != null)
+        {
+            NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnected;
+        }
+    }
+
+    private void OnDestroy()
+    {
+        if (NetworkManager.Singleton != null)
+        {
+            NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnected;
+        }
+    }
+
+    private void OnClientDisconnected(ulong clientId)
+    {
+        // Si el cliente desconectado es el cliente local y no es el servidor/host activo
+        if (NetworkManager.Singleton != null && clientId == NetworkManager.Singleton.LocalClientId)
+        {
+            Debug.Log("[ConnectionUIHandler] Desconectado del servidor. Regresando a la escena de conexión...");
+            if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name != "ConnectionScene")
+            {
+                UnityEngine.SceneManagement.SceneManager.LoadScene("ConnectionScene");
+            }
+        }
+    }
+
     public void StartHost()
     {
         if (NetworkManager.Singleton == null)

@@ -11,6 +11,7 @@ public class NetworkGameManager : MonoBehaviour
     public static NetworkGameManager Instance { get; private set; }
 
     [Header("Scene Names")]
+    [SerializeField] private string connectionSceneName = "ConnectionScene";
     [SerializeField] private string lobbySceneName = "Lobby";
     [SerializeField] private string mainSceneName = "MainScene";
 
@@ -18,6 +19,7 @@ public class NetworkGameManager : MonoBehaviour
     [SerializeField] private bool gameStarted = false;
 
     public bool IsGameStarted => gameStarted;
+    public string ConnectionSceneName => connectionSceneName;
     public string LobbySceneName => lobbySceneName;
     public string MainSceneName => mainSceneName;
 
@@ -36,6 +38,43 @@ public class NetworkGameManager : MonoBehaviour
     private void Start()
     {
         ConfigureConnectionApproval();
+        SubscribeToNetworkEvents();
+    }
+
+    private void OnDestroy()
+    {
+        UnsubscribeFromNetworkEvents();
+    }
+
+    private void SubscribeToNetworkEvents()
+    {
+        if (NetworkManager.Singleton != null)
+        {
+            NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnected;
+            NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnected;
+        }
+    }
+
+    private void UnsubscribeFromNetworkEvents()
+    {
+        if (NetworkManager.Singleton != null)
+        {
+            NetworkManager.Singleton.OnClientDisconnectCallback -= OnClientDisconnected;
+        }
+    }
+
+    private void OnClientDisconnected(ulong clientId)
+    {
+        // Si el cliente desconectado es el cliente local (y no es el host cerrando el servidor)
+        if (NetworkManager.Singleton != null && clientId == NetworkManager.Singleton.LocalClientId && !NetworkManager.Singleton.IsHost)
+        {
+            Debug.Log("[NetworkGameManager] El cliente local se ha desconectado del host. Regresando a ConnectionScene...");
+            ResetGame();
+            if (SceneManager.GetActiveScene().name != connectionSceneName)
+            {
+                SceneManager.LoadScene(connectionSceneName);
+            }
+        }
     }
 
     /// <summary>
@@ -47,6 +86,7 @@ public class NetworkGameManager : MonoBehaviour
 
         NetworkManager.Singleton.NetworkConfig.ConnectionApproval = true;
         NetworkManager.Singleton.ConnectionApprovalCallback = ConnectionApprovalCheck;
+        SubscribeToNetworkEvents();
     }
 
     /// <summary>

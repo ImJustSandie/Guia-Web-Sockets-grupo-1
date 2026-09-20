@@ -16,12 +16,20 @@ public class LobbyUIHandler : MonoBehaviour
     [Tooltip("Boton para iniciar la partida.")]
     [SerializeField] private Button startGameButton;
 
+    [Tooltip("Boton para regresar a la escena de conexion.")]
+    [SerializeField] private Button backButton;
+
     [Header("Scene Configuration")]
     [Tooltip("Nombre de la escena de juego principal a la que se cambiara al presionar Jugar.")]
     [SerializeField] private string mainSceneName = "MainScene";
 
+    [Tooltip("Nombre de la escena de conexion a la que se cambiara al presionar Volver.")]
+    [SerializeField] private string connectionSceneName = "ConnectionScene";
+
     private void Start()
     {
+        EnsureCanvasWorldCamera();
+
         if (NetworkManager.Singleton == null)
         {
             Debug.LogError("[LobbyUIHandler] NetworkManager.Singleton no fue encontrado.");
@@ -35,6 +43,24 @@ public class LobbyUIHandler : MonoBehaviour
         // Configurar la UI inicial
         UpdatePlayerCountUI();
         ConfigureStartButton();
+        ConfigureBackButton();
+    }
+
+    /// <summary>
+    /// Asegura que el Canvas del Lobby tenga asignada la Main Camera de la escena como renderCamera si esta en Screen Space - Camera.
+    /// </summary>
+    private void EnsureCanvasWorldCamera()
+    {
+        Canvas canvas = GetComponentInParent<Canvas>();
+        if (canvas == null) canvas = GetComponentInChildren<Canvas>();
+
+        if (canvas != null && canvas.renderMode == RenderMode.ScreenSpaceCamera && canvas.worldCamera == null)
+        {
+            if (Camera.main != null)
+            {
+                canvas.worldCamera = Camera.main;
+            }
+        }
     }
 
     private void OnDestroy()
@@ -56,6 +82,16 @@ public class LobbyUIHandler : MonoBehaviour
     {
         Debug.Log($"[LobbyUIHandler] Cliente desconectado con ID: {clientId}");
         UpdatePlayerCountUI();
+
+        // Si el cliente desconectado es el cliente local (o el host cerró la conexión)
+        if (NetworkManager.Singleton != null && clientId == NetworkManager.Singleton.LocalClientId && !NetworkManager.Singleton.IsHost)
+        {
+            Debug.Log("[LobbyUIHandler] Se perdió la conexión con el servidor/host. Regresando a la escena de conexión...");
+            if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name != connectionSceneName)
+            {
+                UnityEngine.SceneManagement.SceneManager.LoadScene(connectionSceneName);
+            }
+        }
     }
 
     /// <summary>
@@ -91,6 +127,38 @@ public class LobbyUIHandler : MonoBehaviour
             startGameButton.onClick.RemoveAllListeners();
             startGameButton.onClick.AddListener(OnStartGameButtonClicked);
         }
+    }
+
+    /// <summary>
+    /// Configura el boton de volver a la escena de conexion.
+    /// </summary>
+    private void ConfigureBackButton()
+    {
+        if (backButton == null) return;
+
+        backButton.onClick.RemoveAllListeners();
+        backButton.onClick.AddListener(OnBackButtonClicked);
+    }
+
+    /// <summary>
+    /// Metodo ejecutado al pulsar el boton "Volver".
+    /// Cierra la conexion de red y regresa a la escena de conexion.
+    /// </summary>
+    public void OnBackButtonClicked()
+    {
+        Debug.Log("[LobbyUIHandler] Regresando a la escena de conexión...");
+
+        if (NetworkGameManager.Instance != null)
+        {
+            NetworkGameManager.Instance.ResetGame();
+        }
+
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+        {
+            NetworkManager.Singleton.Shutdown();
+        }
+
+        UnityEngine.SceneManagement.SceneManager.LoadScene(connectionSceneName);
     }
 
     /// <summary>

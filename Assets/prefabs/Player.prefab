@@ -195,8 +195,8 @@ GameObject:
   - component: {fileID: 3086567457648032639}
   - component: {fileID: 166436009278834135}
   m_Layer: 0
-  m_Name: Main Camera
-  m_TagString: MainCamera
+  m_Name: PlayerCamera
+  m_TagString: PlayerCamera
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -530,6 +530,7 @@ MonoBehaviour:
   cameraTransform: {fileID: 0}
   faceMoveDirection: 1
   turnSpeed: 10
+  lobbySceneName: Lobby
   gravity: 0
 --- !u!114 &6879259335654345081
 MonoBehaviour:

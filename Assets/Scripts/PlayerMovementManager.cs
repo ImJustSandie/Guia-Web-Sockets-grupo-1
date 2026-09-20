@@ -43,22 +43,21 @@ public class PlayerMovementManager : NetworkBehaviour
     private PlayerNetworkState lastPublishedPlayerState;
     private bool hasPublishedPlayerState;
 
+    [Header("Scene Camera Settings")]
+    [Tooltip("Nombre de la escena de Lobby donde la cámara del personaje debe permanecer desactivada.")]
+    [SerializeField] private string lobbySceneName = "Lobby";
+
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
+        UpdateCameraState();
+
         if (IsOwner)
         {
             SetupInputActions();
         }
         else
         {
-            // Desactivar cámara local si está como hija o asociada a este avatar no-local
-            Camera cam = GetComponentInChildren<Camera>();
-            if (cam != null) cam.enabled = false;
-
-            AudioListener listener = GetComponentInChildren<AudioListener>();
-            if (listener != null) listener.enabled = false;
-
             // Desactivar CharacterController en instancias remotas para que
             // ClientNetworkTransform sincronice la posición sin conflictos.
             CharacterController cc = GetComponent<CharacterController>();
@@ -68,12 +67,18 @@ public class PlayerMovementManager : NetworkBehaviour
 
     private void OnEnable()
     {
+        UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
+
         if (interactButton != null)
             interactButton.onClick.AddListener(OnInteractButtonPressed);
 
-        if (IsSpawned && IsOwner)
+        if (IsSpawned)
         {
-            SetupInputActions();
+            UpdateCameraState();
+            if (IsOwner)
+            {
+                SetupInputActions();
+            }
         }
     }
 
@@ -106,6 +111,8 @@ public class PlayerMovementManager : NetworkBehaviour
 
     private void OnDisable()
     {
+        UnityEngine.SceneManagement.SceneManager.sceneLoaded -= OnSceneLoaded;
+
         if (interactButton != null)
             interactButton.onClick.RemoveListener(OnInteractButtonPressed);
         if (moveAction != null)
@@ -119,6 +126,36 @@ public class PlayerMovementManager : NetworkBehaviour
             interactAction.performed -= HandleInteract;
             interactAction.Disable();
             interactAction = null;
+        }
+    }
+
+    private void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene, UnityEngine.SceneManagement.LoadSceneMode mode)
+    {
+        UpdateCameraState();
+    }
+
+    /// <summary>
+    /// Activa o desactiva la cámara del personaje según la escena activa y la autoridad (IsOwner).
+    /// En el Lobby la cámara del personaje siempre está desactivada para usar la Main Camera del Lobby.
+    /// En el juego (MainScene) la cámara se activa únicamente para el jugador local (IsOwner).
+    /// </summary>
+    private void UpdateCameraState()
+    {
+        string currentScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+        bool inLobby = (currentScene == lobbySceneName);
+
+        Camera cam = GetComponentInChildren<Camera>();
+        AudioListener listener = GetComponentInChildren<AudioListener>();
+
+        if (!IsOwner || inLobby)
+        {
+            if (cam != null) cam.enabled = false;
+            if (listener != null) listener.enabled = false;
+        }
+        else
+        {
+            if (cam != null) cam.enabled = true;
+            if (listener != null) listener.enabled = true;
         }
     }
 
