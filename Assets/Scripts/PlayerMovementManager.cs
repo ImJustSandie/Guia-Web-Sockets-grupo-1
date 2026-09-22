@@ -32,20 +32,32 @@ public class PlayerMovementManager : NetworkBehaviour
     private InteractableCube currentInteractable;
     private InteractableCube carriedInteractable;
 
+    [Header("Collectibles")]
+    [Tooltip("Contador sincronizado de recolectables. Solo el servidor escribe.")]
+    private NetworkVariable<int> collectedCount = new NetworkVariable<int>(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
     public event Action<bool> IsMovingChanged;
     public event Action<bool> IsCarryingChanged;
+    public event Action<int> CollectedCountChanged;
     public event Action<PlayerNetworkState> NetworkStateChanged;
 
     public bool IsMoving { get; private set; }
-    public bool IsCarrying => carriedInteractable != null;
+    // Nuevo: IsCarrying ahora refleja si lleva al menos 1 recolectable. Se mantiene compatibilidad con código antiguo basado en carriedInteractable.
+    public bool IsCarrying => CollectedCount > 0 || carriedInteractable != null;
+    public int CollectedCount => collectedCount.Value;
 
     private bool lastCarrying;
+    private int lastCollectedCount = -1;
     private PlayerNetworkState lastPublishedPlayerState;
     private bool hasPublishedPlayerState;
 
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
+        collectedCount.OnValueChanged += OnCollectedCountChanged;
+        // Sincronizar estado inicial
+        OnCollectedCountChanged(0, collectedCount.Value);
+
         if (IsOwner)
         {
             SetupInputActions();
@@ -64,6 +76,20 @@ public class PlayerMovementManager : NetworkBehaviour
             CharacterController cc = GetComponent<CharacterController>();
             if (cc != null) cc.enabled = false;
         }
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        collectedCount.OnValueChanged -= OnCollectedCountChanged;
+        base.OnNetworkDespawn();
+    }
+
+    private void OnCollectedCountChanged(int previous, int current)
+    {
+        CollectedCountChanged?.Invoke(current);
+        RefreshCarryingState();
+        PublishPlayerState(true);
+        Debug.Log($"[PlayerMovementManager] {name} recolectados: {current}");
     }
 
     private void OnEnable()
@@ -227,29 +253,9 @@ public class PlayerMovementManager : NetworkBehaviour
 
     private void HandleInteraction()
     {
-        InteractableCube target = currentInteractable;
-
-        if (target != null)
-        {
-            if (target == carriedInteractable)
-            {
-                DropCarried();
-                return;
-            }
-
-            if (carriedInteractable != null)
-                DropCarried();
-
-            if (target.TryPickUp(this))
-                carriedInteractable = target;
-
-            LogState();
-            return;
-        }
-
-        if (carriedInteractable != null)
-            DropCarried();
-
+        // Recolección ahora es automática por trigger (InteractableCube.TryCollect).
+        // Se mantiene el hook por compatibilidad pero ya no hace pickup manual.
+        // Si quieres mantener interacción legacy, descomenta el bloque TryPickUp.
         LogState();
     }
 
@@ -263,7 +269,34 @@ public class PlayerMovementManager : NetworkBehaviour
 
     private void LogState()
     {
-        Debug.Log($"[PlayerMovementManager] cargando cubo: {carriedInteractable != null}");
+        Debug.Log($"[PlayerMovementManager] recolectados: {CollectedCount} | cargando cubo (legacy): {carriedInteractable != null}");
+    }
+
+    /// <summary>Llamado por InteractableCube al ser pisado (hitbox trigger). Solo el servidor incrementa NetworkVariable.</summary>
+    public void AddCollected(int amount = 1)
+    {
+        if (amount <= 0) return;
+        if (IsServer)
+        {
+            collectedCount.Value += amount;
+        }
+        else
+        {
+            RequestAddCollectedServerRpc(amount);
+        }
+    }
+
+    /// <summary>Variante directa solo-servidor usada por InteractableCube.PerformCollect.</summary>
+    public void AddCollectedServerSide(int amount = 1)
+    {
+        if (!IsServer) return;
+        collectedCount.Value += amount;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void RequestAddCollectedServerRpc(int amount)
+    {
+        collectedCount.Value += amount;
     }
 
     public PlayerNetworkState GetNetworkState()
@@ -273,6 +306,7 @@ public class PlayerMovementManager : NetworkBehaviour
             entityId = gameObject.name,
             isMoving = IsMoving,
             isCarrying = IsCarrying,
+            collectedCount = CollectedCount,
             position = transform.position,
             rotation = transform.rotation
         };
@@ -288,9 +322,13 @@ public class PlayerMovementManager : NetworkBehaviour
     private void RefreshCarryingState()
     {
         bool carrying = IsCarrying;
-        if (lastCarrying == carrying) return;
+        bool carryingChanged = lastCarrying != carrying;
+        bool countChanged = lastCollectedCount != CollectedCount;
+        if (!carryingChanged && !countChanged) return;
         lastCarrying = carrying;
-        IsCarryingChanged?.Invoke(carrying);
+        lastCollectedCount = CollectedCount;
+        if (carryingChanged)
+            IsCarryingChanged?.Invoke(carrying);
     }
 
     private void PublishPlayerState(bool force = false)
@@ -309,6 +347,7 @@ public class PlayerMovementManager : NetworkBehaviour
     {
         if (previous.isMoving != current.isMoving) return true;
         if (previous.isCarrying != current.isCarrying) return true;
+        if (previous.collectedCount != current.collectedCount) return true;
         if (Vector3.Distance(previous.position, current.position) > 0.001f) return true;
         if (Quaternion.Angle(previous.rotation, current.rotation) > 0.5f) return true;
         return false;

@@ -14,23 +14,30 @@ public class InteractableCube : NetworkBehaviour
     private Collider playerCollider;
     private Rigidbody cubeRigidbody;
 
-    private bool isCarried;
+    private bool isCarried; // legacy, ya no se usa para carga pero se mantiene para compatibilidad
     private Transform carrier;
+    private bool isCollected;
 
     public event Action<bool> IsBeingCarriedChanged;
     public event Action<bool> IsGroundedChanged;
     public event Action<CubeNetworkState> NetworkStateChanged;
+    public event Action<PlayerMovementManager> Collected;
 
     public bool IsBeingCarried => isCarried;
     public bool IsGrounded { get; private set; }
+    public bool IsCollected => isCollected;
 
     private bool lastCarrying;
     private bool groundTouchThisStep;
     private CubeNetworkState lastPublishedCubeState;
     private bool hasPublishedCubeState;
+    private float spawnTime;
+    [Tooltip("Tiempo de protección tras spawnear para no ser recolectado instantáneamente si spawnea sobre el jugador.")]
+    [SerializeField] private float collectProtectionTime = 0.5f;
 
     private void Awake()
     {
+        spawnTime = Time.time;
         cubeRigidbody = GetComponent<Rigidbody>();
         foreach (Collider c in GetComponents<Collider>())
         {
@@ -51,6 +58,36 @@ public class InteractableCube : NetworkBehaviour
                 trigger.size = boxSolid.size * interactionRange;
             interactionCollider = trigger;
         }
+    }
+
+    public override void OnNetworkSpawn()
+    {
+        base.OnNetworkSpawn();
+        spawnTime = Time.time;
+        CollectibleSpawnManager.Instance?.Register(this);
+    }
+
+    public override void OnNetworkDespawn()
+    {
+        CollectibleSpawnManager.Instance?.Unregister(this);
+        base.OnNetworkDespawn();
+    }
+
+    private void OnEnable()
+    {
+        // Fallback para objetos en escena antes de OnNetworkSpawn o modo offline
+        // HashSet evita duplicados, así que es seguro llamar aquí también
+        CollectibleSpawnManager.Instance?.Register(this);
+    }
+
+    private void OnDisable()
+    {
+        CollectibleSpawnManager.Instance?.Unregister(this);
+    }
+
+    private void OnDestroy()
+    {
+        CollectibleSpawnManager.Instance?.Unregister(this);
     }
 
     private void Start()
@@ -103,36 +140,31 @@ public class InteractableCube : NetworkBehaviour
 
     private void OnTriggerEnter(Collider other)
     {
-        var player = other.GetComponentInParent<PlayerMovementManager>();
-        if (player == null) return;
-
-        playerCollider = other;
-        player.SetInteractableInRange(this, true);
+        TryCollectFromCollider(other);
     }
 
     private void OnTriggerStay(Collider other)
     {
-        if (isCarried) return;
-
-        var player = other.GetComponentInParent<PlayerMovementManager>();
-        if (player == null) return;
-
-        playerCollider = other;
-        player.SetInteractableInRange(this, true);
+        TryCollectFromCollider(other);
     }
 
     private void OnTriggerExit(Collider other)
     {
-        // Mientras esta cargado el trigger se mueve con el cubo y
-        // inevitablemente sale del jugador. Ignorar esa salida para
-        // no perder la referencia ni provocar un Drop inmediato.
-        if (isCarried) return;
+        // Sin lógica de rango: la recolección es automática al tocar la hitbox.
+        // Se deja vacío por compatibilidad.
+        if (other == playerCollider) playerCollider = null;
+    }
 
-        var player = other.GetComponentInParent<PlayerMovementManager>();
+    private void TryCollectFromCollider(Collider other)
+    {
+        if (isCollected || isCarried) return;
+        if (Time.time - spawnTime < collectProtectionTime) return;
+
+        PlayerMovementManager player = other.GetComponentInParent<PlayerMovementManager>();
         if (player == null) return;
 
-        if (other == playerCollider) playerCollider = null;
-        player.OnInteractableExitRange(this);
+        playerCollider = other;
+        TryCollect(player);
     }
 
     private void LateUpdate()
@@ -144,54 +176,69 @@ public class InteractableCube : NetworkBehaviour
         PublishCubeState();
     }
 
-    public bool TryPickUp(PlayerMovementManager player)
+    // ── Nueva lógica: recolección automática al tocar la hitbox ──────────────
+
+    /// <summary>Intenta recolectar automáticamente al pasar por la hitbox. Solo requiere contacto trigger.</summary>
+    public bool TryCollect(PlayerMovementManager player)
     {
-        if (isCarried || player == null) return false;
-        if (Vector3.Distance(transform.position, player.transform.position) > maxPickupDistance) return false;
-        if (solidCollider == null) return false;
+        if (isCollected || player == null) return false;
 
         if (IsServer)
         {
-            PerformPickUp(player.NetworkObjectId);
+            PerformCollect(player.NetworkObjectId);
         }
         else
         {
-            RequestPickUpServerRpc(player.NetworkObjectId);
+            RequestCollectServerRpc(player.NetworkObjectId);
         }
         return true;
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    private void RequestPickUpServerRpc(ulong playerNetworkObjectId)
+    private void RequestCollectServerRpc(ulong playerNetworkObjectId)
     {
-        PerformPickUp(playerNetworkObjectId);
+        PerformCollect(playerNetworkObjectId);
     }
 
-    private void PerformPickUp(ulong playerNetworkObjectId)
+    private void PerformCollect(ulong playerNetworkObjectId)
     {
-        // Si ya está siendo cargado, ignorar
-        if (isCarried) return;
+        if (isCollected) return;
+        isCollected = true;
 
-        if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(playerNetworkObjectId, out NetworkObject playerObj))
+        if (NetworkManager.Singleton != null &&
+            NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(playerNetworkObjectId, out NetworkObject playerObj))
         {
-            isCarried = true;
-            carrier = playerObj.transform;
-
-            // Ignorar colisión entre el jugador y el cubo sólido
-            IgnorePlayerCollision(playerObj, true);
-
-            if (cubeRigidbody != null)
+            PlayerMovementManager pm = playerObj.GetComponent<PlayerMovementManager>();
+            if (pm != null)
             {
-                cubeRigidbody.linearVelocity = Vector3.zero;
-                cubeRigidbody.angularVelocity = Vector3.zero;
-                cubeRigidbody.isKinematic = true;
-                cubeRigidbody.useGravity = false;
+                pm.AddCollectedServerSide(1);
+                Collected?.Invoke(pm);
             }
-            SetGrounded(false);
-            PublishCubeState(true);
-            NotifyPickUpClientRpc(playerNetworkObjectId);
+        }
+
+        // Desaparecer automáticamente (Network despawn). Libera slot en CollectibleSpawnManager.
+        PublishCubeState(true);
+        var netObj = GetComponent<NetworkObject>();
+        if (netObj != null && netObj.IsSpawned)
+        {
+            netObj.Despawn(true);
+        }
+        else
+        {
+            Destroy(gameObject);
         }
     }
+
+    // ── Legacy: pickup manual ya no se usa, se mantiene por compatibilidad ──────
+
+    [Obsolete("Usa TryCollect: la recolección ahora es automática por trigger.")]
+    public bool TryPickUp(PlayerMovementManager player)
+    {
+        return TryCollect(player);
+    }
+
+    [Obsolete("Ya no hay drop manual, el objeto desaparece al recolectarse.")]
+    public void Drop() { }
 
     /// <summary>Ignora o restaura colisiones entre todos los colliders del jugador y el solidCollider del cubo.</summary>
     private void IgnorePlayerCollision(NetworkObject playerObj, bool ignore)
@@ -202,106 +249,6 @@ public class InteractableCube : NetworkBehaviour
             if (!col.isTrigger)
                 Physics.IgnoreCollision(col, solidCollider, ignore);
         }
-    }
-
-    [Rpc(SendTo.NotServer)]
-    private void NotifyPickUpClientRpc(ulong playerNetworkObjectId)
-    {
-        if (IsServer) return; // Ya procesado en el servidor
-
-        if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(playerNetworkObjectId, out NetworkObject playerObj))
-        {
-            isCarried = true;
-            carrier = playerObj.transform;
-
-            IgnorePlayerCollision(playerObj, true);
-
-            if (cubeRigidbody != null)
-            {
-                cubeRigidbody.isKinematic = true;
-                cubeRigidbody.useGravity = false;
-            }
-            SetGrounded(false);
-            PublishCubeState(true);
-        }
-    }
-
-    public void Drop()
-    {
-        if (IsServer)
-        {
-            PerformDrop();
-        }
-        else
-        {
-            RequestDropServerRpc();
-        }
-    }
-
-    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-    private void RequestDropServerRpc()
-    {
-        PerformDrop();
-    }
-
-    private void PerformDrop()
-    {
-        if (!isCarried) return;
-
-        // Restaurar colisiones con el carrier
-        if (carrier != null)
-        {
-            NetworkObject carrierObj = carrier.GetComponent<NetworkObject>();
-            if (carrierObj != null)
-                IgnorePlayerCollision(carrierObj, false);
-        }
-
-        ulong carrierNetObjId = 0;
-        if (carrier != null)
-        {
-            var nObj = carrier.GetComponent<NetworkObject>();
-            if (nObj != null) carrierNetObjId = nObj.NetworkObjectId;
-        }
-
-        isCarried = false;
-        carrier = null;
-
-        if (cubeRigidbody != null)
-        {
-            cubeRigidbody.isKinematic = false;
-            cubeRigidbody.useGravity = true;
-            cubeRigidbody.linearVelocity = Vector3.zero;
-            cubeRigidbody.angularVelocity = Vector3.zero;
-        }
-
-        RefreshGroundedState(cubeRigidbody == null);
-        PublishCubeState(true);
-        NotifyDropClientRpc(carrierNetObjId);
-    }
-
-    [Rpc(SendTo.NotServer)]
-    private void NotifyDropClientRpc(ulong carrierNetworkObjectId)
-    {
-        if (IsServer) return;
-
-        // Restaurar colisiones con el carrier en el cliente
-        if (carrierNetworkObjectId != 0 &&
-            NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(carrierNetworkObjectId, out NetworkObject carrierObj))
-        {
-            IgnorePlayerCollision(carrierObj, false);
-        }
-
-        isCarried = false;
-        carrier = null;
-
-        if (cubeRigidbody != null)
-        {
-            cubeRigidbody.isKinematic = false;
-            cubeRigidbody.useGravity = true;
-        }
-
-        RefreshGroundedState(cubeRigidbody == null);
-        PublishCubeState(true);
     }
 
     public CubeNetworkState GetNetworkState()

@@ -1,4 +1,3 @@
-
 description: Unity C# development agent restricted to code changes
 ------------------------------------------------------------------
 

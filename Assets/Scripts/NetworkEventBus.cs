@@ -7,6 +7,7 @@ public struct PlayerNetworkState
     public string entityId;
     public bool isMoving;
     public bool isCarrying;
+    public int collectedCount;
     public Vector3 position;
     public Quaternion rotation;
 }
