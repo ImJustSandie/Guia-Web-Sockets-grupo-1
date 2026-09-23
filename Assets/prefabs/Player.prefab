@@ -364,6 +364,7 @@ GameObject:
   - component: {fileID: 6879259335654345081}
   - component: {fileID: 2534427879259421092}
   - component: {fileID: 8645819395662723279}
+  - component: {fileID: 8444772134445848065}
   m_Layer: 0
   m_Name: Player
   m_TagString: Untagged
@@ -530,8 +531,7 @@ MonoBehaviour:
   cameraTransform: {fileID: 0}
   faceMoveDirection: 1
   turnSpeed: 10
-  lobbySceneName: Lobby
-  gravity: 0
+  maxCollected: 5
 --- !u!114 &6879259335654345081
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -611,3 +611,28 @@ MonoBehaviour:
   lobbySlotsObjectName: LobbySlots
   lobbySceneName: Lobby
   fallbackSlotOffset: 2
+--- !u!143 &8444772134445848065
+CharacterController:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6201794615766329114}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 3
+  m_Height: 2
+  m_Radius: 0.5
+  m_SlopeLimit: 45
+  m_StepOffset: 0.3
+  m_SkinWidth: 0.08
+  m_MinMoveDistance: 0.001
+  m_Center: {x: 0, y: 0, z: 0}

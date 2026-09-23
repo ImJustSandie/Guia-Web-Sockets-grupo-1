@@ -8,6 +8,7 @@ public struct PlayerNetworkState
     public bool isMoving;
     public bool isCarrying;
     public int collectedCount;
+    public int deliveredScore;
     public Vector3 position;
     public Quaternion rotation;
 }

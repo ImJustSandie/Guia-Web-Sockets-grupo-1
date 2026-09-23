@@ -76,19 +76,67 @@ public class LobbyPlayerDisplay : NetworkBehaviour
 
     private void Update()
     {
-        // Hacer que el texto flotante siempre mire hacia la cámara principal (Billboard effect)
+        // Hacer que el texto flotante siempre mire hacia la cámara que renderiza la vista (Billboard)
+        // Necesario en MainScene donde la cámara del jugador es PlayerCamera (no MainCamera)
         if (playerLabelText != null)
         {
-            if (mainCamera == null)
+            Camera cam = ResolveCamera();
+            if (cam != null)
             {
-                mainCamera = Camera.main;
-            }
-
-            if (mainCamera != null)
-            {
-                playerLabelText.transform.rotation = Quaternion.LookRotation(playerLabelText.transform.position - mainCamera.transform.position);
+                Vector3 dir = playerLabelText.transform.position - cam.transform.position;
+                if (dir.sqrMagnitude > 0.0001f)
+                    playerLabelText.transform.rotation = Quaternion.LookRotation(dir);
             }
         }
+    }
+
+    private Camera ResolveCamera()
+    {
+        if (mainCamera != null) return mainCamera;
+
+        // 1) MainCamera tag
+        if (Camera.main != null)
+        {
+            mainCamera = Camera.main;
+            return mainCamera;
+        }
+
+        // 2) Cualquier cámara activa (PlayerCamera del owner en MainScene no tiene tag MainCamera)
+        Camera anyCam = FindFirstObjectByType<Camera>();
+        // Preferir la cámara del jugador local (owner) si existe, para que los labels remotos miren al observador
+        PlayerMovementManager localPlayer = null;
+        foreach (PlayerMovementManager pm in FindObjectsByType<PlayerMovementManager>(FindObjectsSortMode.None))
+        {
+            if (pm.IsOwner)
+            {
+                localPlayer = pm;
+                break;
+            }
+        }
+        if (localPlayer != null)
+        {
+            Camera localCam = localPlayer.GetComponentInChildren<Camera>(true);
+            if (localCam != null && localCam.enabled)
+            {
+                mainCamera = localCam;
+                return mainCamera;
+            }
+        }
+
+        if (anyCam != null)
+        {
+            // Si hay varias, preferir la habilitada
+            if (anyCam.enabled)
+            {
+                mainCamera = anyCam;
+                return mainCamera;
+            }
+            // Fallback a la primera encontrada
+            mainCamera = anyCam;
+            return mainCamera;
+        }
+
+        return null;
     }
 
     /// <summary>

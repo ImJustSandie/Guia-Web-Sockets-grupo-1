@@ -5,6 +5,7 @@ using UnityEngine.Events;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
+[RequireComponent(typeof(CharacterController))]
 public class PlayerMovementManager : NetworkBehaviour
 {
     [SerializeField] private InputActionAsset actionsAsset;
@@ -18,7 +19,7 @@ public class PlayerMovementManager : NetworkBehaviour
     [SerializeField] private Button interactButton;
 
     [Header("Camera Relative")]
-    [Tooltip("Camara de referencia para el movimiento. Si se deja vacio se usa Camera.main.")]
+    [Tooltip("Camara de referencia para el movimiento. Si se deja vacio se detecta la camara del jugador (PlayerCamera).")]
     [SerializeField] private Transform cameraTransform;
     [Tooltip("Si es true, el jugador rota para mirar hacia la direccion de movimiento.")]
     [SerializeField] private bool faceMoveDirection = true;
@@ -33,54 +34,94 @@ public class PlayerMovementManager : NetworkBehaviour
     private InteractableCube carriedInteractable;
 
     [Header("Collectibles")]
+    [Tooltip("Número máximo de objetos que el jugador puede llevar a la vez.")]
+    [SerializeField] private int maxCollected = 5;
     [Tooltip("Contador sincronizado de recolectables. Solo el servidor escribe.")]
     private NetworkVariable<int> collectedCount = new NetworkVariable<int>(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    [Header("Scoring")]
+    [Tooltip("Puntuación total entregada en edificio. Solo el servidor escribe.")]
+    private NetworkVariable<int> deliveredScore = new NetworkVariable<int>(0, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
     public event Action<bool> IsMovingChanged;
     public event Action<bool> IsCarryingChanged;
     public event Action<int> CollectedCountChanged;
+    public event Action<int> ScoreChanged;
     public event Action<PlayerNetworkState> NetworkStateChanged;
 
     public bool IsMoving { get; private set; }
     // Nuevo: IsCarrying ahora refleja si lleva al menos 1 recolectable. Se mantiene compatibilidad con código antiguo basado en carriedInteractable.
     public bool IsCarrying => CollectedCount > 0 || carriedInteractable != null;
     public int CollectedCount => collectedCount.Value;
+    public int MaxCollected => maxCollected;
+    public bool CanCollect => CollectedCount < maxCollected;
+    public bool IsInventoryFull => CollectedCount >= maxCollected;
+    public int Score => deliveredScore.Value;
 
     private bool lastCarrying;
     private int lastCollectedCount = -1;
+    private int lastScore = -1;
     private PlayerNetworkState lastPublishedPlayerState;
     private bool hasPublishedPlayerState;
+
+    private CharacterController characterController;
+    private Camera cachedPlayerCamera;
+
+    private void Awake()
+    {
+        EnsureCharacterController();
+    }
 
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
+        EnsureCharacterController();
+        ResolveCameraTransform();
         collectedCount.OnValueChanged += OnCollectedCountChanged;
+        deliveredScore.OnValueChanged += OnScoreChanged;
         // Sincronizar estado inicial
         OnCollectedCountChanged(0, collectedCount.Value);
+        OnScoreChanged(0, deliveredScore.Value);
 
         if (IsOwner)
         {
             SetupInputActions();
+            // Asegurar que el controlador de cámara siga a este jugador local
+            CameraYawPitchDragController camController = GetComponentInChildren<CameraYawPitchDragController>(true);
+            if (camController != null)
+            {
+                camController.enabled = true;
+                camController.SetTarget(transform);
+            }
+            // Asegurar cámara y audio del owner activos
+            Camera cam = GetComponentInChildren<Camera>(true);
+            if (cam != null) cam.enabled = true;
+            AudioListener listener = GetComponentInChildren<AudioListener>(true);
+            if (listener != null) listener.enabled = true;
+            if (characterController != null) characterController.enabled = true;
         }
         else
         {
             // Desactivar cámara local si está como hija o asociada a este avatar no-local
-            Camera cam = GetComponentInChildren<Camera>();
+            Camera cam = GetComponentInChildren<Camera>(true);
             if (cam != null) cam.enabled = false;
 
-            AudioListener listener = GetComponentInChildren<AudioListener>();
+            AudioListener listener = GetComponentInChildren<AudioListener>(true);
             if (listener != null) listener.enabled = false;
+
+            CameraYawPitchDragController camController = GetComponentInChildren<CameraYawPitchDragController>(true);
+            if (camController != null) camController.enabled = false;
 
             // Desactivar CharacterController en instancias remotas para que
             // ClientNetworkTransform sincronice la posición sin conflictos.
-            CharacterController cc = GetComponent<CharacterController>();
-            if (cc != null) cc.enabled = false;
+            if (characterController != null) characterController.enabled = false;
         }
     }
 
     public override void OnNetworkDespawn()
     {
         collectedCount.OnValueChanged -= OnCollectedCountChanged;
+        deliveredScore.OnValueChanged -= OnScoreChanged;
         base.OnNetworkDespawn();
     }
 
@@ -90,6 +131,13 @@ public class PlayerMovementManager : NetworkBehaviour
         RefreshCarryingState();
         PublishPlayerState(true);
         Debug.Log($"[PlayerMovementManager] {name} recolectados: {current}");
+    }
+
+    private void OnScoreChanged(int previous, int current)
+    {
+        ScoreChanged?.Invoke(current);
+        PublishPlayerState(true);
+        Debug.Log($"[PlayerMovementManager] {name} puntuación: {current}");
     }
 
     private void OnEnable()
@@ -148,27 +196,13 @@ public class PlayerMovementManager : NetworkBehaviour
         }
     }
 
-    [SerializeField] private float gravity = -9.81f;
-    private float verticalVelocity;
-
     private void Update()
     {
         if (!IsOwner) return;
 
-        CharacterController cc = GetComponent<CharacterController>();
-
-        // Aplicar Gravedad
-        if (cc != null && cc.enabled)
-        {
-            if (cc.isGrounded && verticalVelocity < 0f)
-            {
-                verticalVelocity = -2f; // Mantener al jugador pegado al suelo
-            }
-            else
-            {
-                verticalVelocity += gravity * Time.deltaTime;
-            }
-        }
+        // Lazy resolve por si la cámara se instanció después
+        if (cameraTransform == null)
+            ResolveCameraTransform();
 
         Vector2 input = Vector2.zero;
 
@@ -182,9 +216,7 @@ public class PlayerMovementManager : NetworkBehaviour
         SetIsMoving(moving);
         RefreshCarryingState();
 
-        Transform cam = cameraTransform;
-        if (cam == null && Camera.main != null)
-            cam = Camera.main.transform;
+        Transform cam = ResolveCameraTransform();
 
         Vector3 forward = Vector3.forward;
         Vector3 right = Vector3.right;
@@ -209,11 +241,10 @@ public class PlayerMovementManager : NetworkBehaviour
         if (direction.sqrMagnitude > 1f) direction.Normalize();
 
         Vector3 velocity = direction * moveSpeed;
-        velocity.y = verticalVelocity;
 
-        if (cc != null && cc.enabled)
+        if (characterController != null && characterController.enabled)
         {
-            cc.Move(velocity * Time.deltaTime);
+            characterController.Move(velocity * Time.deltaTime);
         }
         else
         {
@@ -229,6 +260,64 @@ public class PlayerMovementManager : NetworkBehaviour
 
         RefreshCarryingState();
         PublishPlayerState();
+    }
+
+    private void EnsureCharacterController()
+    {
+        if (characterController == null)
+            characterController = GetComponent<CharacterController>();
+
+        if (characterController == null)
+        {
+            characterController = gameObject.AddComponent<CharacterController>();
+            characterController.center = new Vector3(0f, 1f, 0f);
+            characterController.height = 2f;
+            characterController.radius = 0.5f;
+            characterController.skinWidth = 0.08f;
+            characterController.minMoveDistance = 0.001f;
+        }
+
+        // Si queda un CapsuleCollider legacy solapado con el CharacterController, desactivarlo para evitar jitter
+        CapsuleCollider capsule = GetComponent<CapsuleCollider>();
+        if (capsule != null && characterController != null)
+        {
+            // Solo desactivar si ambos están en el mismo GameObject y el CC está activo
+            if (capsule.enabled)
+            {
+                // Mantener trigger colliders intactos, solo solid
+                if (!capsule.isTrigger)
+                    capsule.enabled = false;
+            }
+        }
+    }
+
+    private Transform ResolveCameraTransform()
+    {
+        if (cameraTransform != null) return cameraTransform;
+
+        // Prioridad 1: cámara hija del propio jugador (PlayerCamera del prefab)
+        if (cachedPlayerCamera == null)
+            cachedPlayerCamera = GetComponentInChildren<Camera>(true);
+        if (cachedPlayerCamera != null)
+        {
+            cameraTransform = cachedPlayerCamera.transform;
+            return cameraTransform;
+        }
+
+        if (Camera.main != null)
+        {
+            cameraTransform = Camera.main.transform;
+            return cameraTransform;
+        }
+
+        Camera anyCam = FindFirstObjectByType<Camera>();
+        if (anyCam != null)
+        {
+            cameraTransform = anyCam.transform;
+            return cameraTransform;
+        }
+
+        return null;
     }
 
     /// <summary>Llamado por el joystick virtual (evento Vector2) para mover al jugador.</summary>
@@ -273,31 +362,92 @@ public class PlayerMovementManager : NetworkBehaviour
     }
 
     /// <summary>Llamado por InteractableCube al ser pisado (hitbox trigger). Solo el servidor incrementa NetworkVariable.</summary>
-    public void AddCollected(int amount = 1)
+    public bool AddCollected(int amount = 1)
     {
-        if (amount <= 0) return;
+        if (amount <= 0) return false;
+        if (IsInventoryFull)
+        {
+            Debug.Log($"[PlayerMovementManager] {name} inventario lleno ({CollectedCount}/{maxCollected}), no se puede recolectar.");
+            return false;
+        }
         if (IsServer)
         {
-            collectedCount.Value += amount;
+            int allowed = Mathf.Min(amount, maxCollected - collectedCount.Value);
+            if (allowed <= 0) return false;
+            collectedCount.Value += allowed;
+            return true;
         }
         else
         {
             RequestAddCollectedServerRpc(amount);
+            // Resultado real se valida en servidor; retorno optimista si aún hay espacio
+            return true;
         }
     }
 
-    /// <summary>Variante directa solo-servidor usada por InteractableCube.PerformCollect.</summary>
-    public void AddCollectedServerSide(int amount = 1)
+    /// <summary>Variante directa solo-servidor usada por InteractableCube.PerformCollect. Retorna false si inventario lleno.</summary>
+    public bool AddCollectedServerSide(int amount = 1)
     {
-        if (!IsServer) return;
-        collectedCount.Value += amount;
+        if (!IsServer) return false;
+        if (IsInventoryFull) return false;
+        int allowed = Mathf.Min(amount, maxCollected - collectedCount.Value);
+        if (allowed <= 0) return false;
+        collectedCount.Value += allowed;
+        return true;
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
     private void RequestAddCollectedServerRpc(int amount)
     {
-        collectedCount.Value += amount;
+        if (IsInventoryFull) return;
+        int allowed = Mathf.Min(amount, maxCollected - collectedCount.Value);
+        if (allowed <= 0) return;
+        collectedCount.Value += allowed;
     }
+
+    // ── Entrega en edificio ───────────────────────────────────────────────
+
+    /// <summary>Intenta entregar todo lo que lleva al edificio. Retorna true si había algo que entregar.</summary>
+    public bool TryDeposit()
+    {
+        if (CollectedCount <= 0) return false;
+        if (IsServer)
+        {
+            return DepositServerSide();
+        }
+        else
+        {
+            RequestDepositServerRpc();
+            return true; // optimista, el servidor validará
+        }
+    }
+
+    /// <summary>Versión solo-servidor. Mueve collectedCount -> deliveredScore y vacía inventario.</summary>
+    public bool DepositServerSide()
+    {
+        if (!IsServer) return false;
+        int amount = collectedCount.Value;
+        if (amount <= 0) return false;
+        collectedCount.Value = 0;
+        deliveredScore.Value += amount;
+        Debug.Log($"[PlayerMovementManager] {name} entregó {amount} -> puntuación {deliveredScore.Value}");
+        return true;
+    }
+
+    [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+    private void RequestDepositServerRpc()
+    {
+        DepositServerSide();
+    }
+
+#if UNITY_EDITOR
+    private void OnValidate()
+    {
+        if (maxCollected < 1) maxCollected = 1;
+        if (moveSpeed < 0f) moveSpeed = 0f;
+        if (turnSpeed < 0f) turnSpeed = 0f;
+    }
+#endif
 
     public PlayerNetworkState GetNetworkState()
     {
@@ -307,6 +457,7 @@ public class PlayerMovementManager : NetworkBehaviour
             isMoving = IsMoving,
             isCarrying = IsCarrying,
             collectedCount = CollectedCount,
+            deliveredScore = Score,
             position = transform.position,
             rotation = transform.rotation
         };
@@ -324,9 +475,11 @@ public class PlayerMovementManager : NetworkBehaviour
         bool carrying = IsCarrying;
         bool carryingChanged = lastCarrying != carrying;
         bool countChanged = lastCollectedCount != CollectedCount;
-        if (!carryingChanged && !countChanged) return;
+        bool scoreChanged = lastScore != Score;
+        if (!carryingChanged && !countChanged && !scoreChanged) return;
         lastCarrying = carrying;
         lastCollectedCount = CollectedCount;
+        lastScore = Score;
         if (carryingChanged)
             IsCarryingChanged?.Invoke(carrying);
     }
@@ -348,6 +501,7 @@ public class PlayerMovementManager : NetworkBehaviour
         if (previous.isMoving != current.isMoving) return true;
         if (previous.isCarrying != current.isCarrying) return true;
         if (previous.collectedCount != current.collectedCount) return true;
+        if (previous.deliveredScore != current.deliveredScore) return true;
         if (Vector3.Distance(previous.position, current.position) > 0.001f) return true;
         if (Quaternion.Angle(previous.rotation, current.rotation) > 0.5f) return true;
         return false;

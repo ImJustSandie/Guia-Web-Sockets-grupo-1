@@ -182,16 +182,17 @@ public class InteractableCube : NetworkBehaviour
     public bool TryCollect(PlayerMovementManager player)
     {
         if (isCollected || player == null) return false;
+        if (player.IsInventoryFull) return false;
 
         if (IsServer)
         {
-            PerformCollect(player.NetworkObjectId);
+            return PerformCollect(player.NetworkObjectId);
         }
         else
         {
             RequestCollectServerRpc(player.NetworkObjectId);
+            return true;
         }
-        return true;
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
@@ -200,21 +201,40 @@ public class InteractableCube : NetworkBehaviour
         PerformCollect(playerNetworkObjectId);
     }
 
-    private void PerformCollect(ulong playerNetworkObjectId)
+    private bool PerformCollect(ulong playerNetworkObjectId)
     {
-        if (isCollected) return;
-        isCollected = true;
+        if (isCollected) return false;
 
+        // Validar límite antes de marcar como recolectado
+        PlayerMovementManager targetPlayer = null;
+        NetworkObject playerObj = null;
         if (NetworkManager.Singleton != null &&
-            NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(playerNetworkObjectId, out NetworkObject playerObj))
+            NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(playerNetworkObjectId, out playerObj))
         {
-            PlayerMovementManager pm = playerObj.GetComponent<PlayerMovementManager>();
-            if (pm != null)
+            targetPlayer = playerObj.GetComponent<PlayerMovementManager>();
+            if (targetPlayer != null && targetPlayer.IsInventoryFull)
             {
-                pm.AddCollectedServerSide(1);
-                Collected?.Invoke(pm);
+                Debug.Log($"[InteractableCube] {name} no recolectado: inventario lleno de {targetPlayer.name} ({targetPlayer.CollectedCount}/{targetPlayer.MaxCollected}).");
+                return false;
             }
         }
+        else
+        {
+            Debug.LogWarning($"[InteractableCube] No se encontró Player {playerNetworkObjectId} para recolectar {name}.");
+            return false;
+        }
+
+        isCollected = true;
+
+        bool added = targetPlayer.AddCollectedServerSide(1);
+        if (!added)
+        {
+            // Límite alcanzado entre validación y escritura (race condition) -> cancelar
+            isCollected = false;
+            Debug.Log($"[InteractableCube] {name} recolección cancelada: inventario lleno.");
+            return false;
+        }
+        Collected?.Invoke(targetPlayer);
 
         // Desaparecer automáticamente (Network despawn). Libera slot en CollectibleSpawnManager.
         PublishCubeState(true);
@@ -227,6 +247,7 @@ public class InteractableCube : NetworkBehaviour
         {
             Destroy(gameObject);
         }
+        return true;
     }
 
     // ── Legacy: pickup manual ya no se usa, se mantiene por compatibilidad ──────
