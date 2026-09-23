@@ -46,15 +46,88 @@ public class PodiumManager : MonoBehaviour
     [Tooltip("Textos opcionales para mostrar nombre/puntos en cada podio. Index 0=1º")]
     [SerializeField] private TMP_Text[] rankLabels;
 
+    [Header("Camera Follow")]
+    [Tooltip("Si es true, la cámara de Podio sube acompañando al jugador con más puntos.")]
+    [SerializeField] private bool followCamera = true;
+    [Tooltip("Offset de la cámara respecto a la cima de la torre más alta. Reducido para no dejar al jugador fuera de encuadre.")]
+    [SerializeField] private Vector3 cameraOffset = new Vector3(0f, 1.8f, -10f);
+    [SerializeField] private float cameraFollowSpeed = 1.2f;
+    [Tooltip("La cámara no empieza a subir hasta que se hayan colocado al menos estos bloques en total.")]
+    [SerializeField] private int cameraFollowThresholdBlocks = 5;
+
     [Header("Debug")]
     [SerializeField] private bool logRanking = true;
 
     private readonly List<GameObject> spawnedBlocks = new List<GameObject>();
     private List<PlayerMovementManager> rankedPlayers = new List<PlayerMovementManager>();
+    private Camera podiumCamera;
+    private Vector3 podiumCameraInitialPos;
+    private float podiumCameraTargetY;
+    private float podiumCameraBaseY;
 
     private void Start()
     {
         StartCoroutine(SetupPodiumRoutine());
+    }
+
+    private void LateUpdate()
+    {
+        Camera cam = podiumCamera;
+        if (cam == null)
+        {
+            cam = Camera.main;
+            if (cam == null) cam = FindFirstObjectByType<Camera>();
+            podiumCamera = cam;
+        }
+        if (cam != null)
+        {
+            // Rank labels mirando al frente de la cámara
+            if (rankLabels != null)
+            {
+                foreach (TMP_Text label in rankLabels)
+                {
+                    if (label == null) continue;
+                    label.transform.rotation = Quaternion.LookRotation(-cam.transform.forward, cam.transform.up);
+                }
+            }
+
+            // Cámara sigue la cima de la torre más alta (no la cúspide del salto) para evitar adelantarse
+            if (followCamera && rankedPlayers != null && rankedPlayers.Count > 0)
+            {
+                if (spawnedBlocks.Count < cameraFollowThresholdBlocks) return;
+
+                // Usar la altura de la torre (bloque más alto) en vez de la Y del jugador con salto, así no se adelanta
+                float maxBlockY = float.MinValue;
+                foreach (var b in spawnedBlocks)
+                {
+                    if (b == null) continue;
+                    if (b.transform.position.y > maxBlockY) maxBlockY = b.transform.position.y;
+                }
+                float targetY;
+                if (maxBlockY != float.MinValue)
+                {
+                    // Cima de la torre + offset del jugador + offset de cámara → jugador queda centrado, no abajo
+                    targetY = maxBlockY + blockHeight * 0.5f + playerHeightOffset + cameraOffset.y;
+                }
+                else
+                {
+                    float maxY = float.MinValue;
+                    foreach (var pm in rankedPlayers)
+                    {
+                        if (pm == null) continue;
+                        // Quitar el pico del salto para no adelantar
+                        float yWithoutJump = pm.transform.position.y - jumpHeight * 0.5f;
+                        if (yWithoutJump > maxY) maxY = yWithoutJump;
+                    }
+                    if (maxY == float.MinValue) return;
+                    targetY = Mathf.Max(podiumCameraBaseY, maxY + cameraOffset.y);
+                }
+                targetY = Mathf.Max(podiumCameraBaseY, targetY);
+                Vector3 cur = cam.transform.position;
+                Vector3 desired = new Vector3(cur.x, targetY, cur.z);
+                cam.transform.position = Vector3.Lerp(cur, desired, Time.deltaTime * cameraFollowSpeed);
+            }
+        }
     }
 
     private IEnumerator SetupPodiumRoutine()
@@ -80,6 +153,30 @@ public class PodiumManager : MonoBehaviour
 
         ResolveSlots();
         RankPlayers();
+
+        // Configurar cámara de podio: usar Main Camera y desactivar PlayerCameras para tener una sola vista
+        podiumCamera = Camera.main;
+        if (podiumCamera == null) podiumCamera = FindFirstObjectByType<Camera>();
+        if (podiumCamera != null)
+        {
+            podiumCameraBaseY = podiumCamera.transform.position.y;
+            podiumCameraTargetY = podiumCameraBaseY;
+            // Desactivar todas las PlayerCamera (las del prefab) para que solo renderice la del podio
+            foreach (var pm in rankedPlayers)
+            {
+                Camera pc = pm.GetComponentInChildren<Camera>(true);
+                if (pc != null && pc != podiumCamera) pc.enabled = false;
+                AudioListener al = pm.GetComponentInChildren<AudioListener>(true);
+                if (al != null) al.enabled = false;
+                var camCtrl = pm.GetComponentInChildren<CameraYawPitchDragController>(true);
+                if (camCtrl != null) camCtrl.enabled = false;
+            }
+            // Asegurar que la cámara del podio esté activa y con AudioListener
+            podiumCamera.enabled = true;
+            var podiumListener = podiumCamera.GetComponent<AudioListener>();
+            if (podiumListener == null) podiumCamera.gameObject.AddComponent<AudioListener>();
+            else podiumListener.enabled = true;
+        }
 
         // Colocar jugadores en sus slots
         for (int i = 0; i < rankedPlayers.Count && i < podiumSlots.Length; i++)
@@ -186,7 +283,6 @@ public class PodiumManager : MonoBehaviour
         Quaternion rot = slot.rotation;
 
         // Desactivar movimiento autónomo del jugador durante el podio para que no interfiera con la animación
-        // (PlayerMovementManager.Update dejaría de responder a input)
         pm.enabled = false;
 
         // Desactivar CharacterController para teleport sin colisión
@@ -196,19 +292,7 @@ public class PodiumManager : MonoBehaviour
         pm.transform.rotation = rot;
         if (cc != null) cc.enabled = true;
 
-        // Si es el owner local, asegurar que la cámara siga
-        if (pm.IsOwner)
-        {
-            CameraYawPitchDragController camCtrl = pm.GetComponentInChildren<CameraYawPitchDragController>(true);
-            if (camCtrl != null)
-            {
-                camCtrl.enabled = true;
-                camCtrl.SetTarget(pm.transform);
-            }
-            // Asegurar cámara del owner activa (en MainScene se desactiva para remotos)
-            Camera cam = pm.GetComponentInChildren<Camera>(true);
-            if (cam != null) cam.enabled = true;
-        }
+        // En Podio no usar PlayerCamera: se desactiva en SetupPodiumRoutine y se usa la Main Camera del podio
     }
 
     private IEnumerator BuildTowerAndJumpRoutine(PlayerMovementManager player, Transform slot)
@@ -218,12 +302,9 @@ public class PodiumManager : MonoBehaviour
         int totalBlocks = player.Score + player.CollectedCount;
         if (totalBlocks <= 0)
         {
-            // Sin puntos: solo salto idle
-            while (true)
-            {
-                yield return AnimateJump(player, slot.position + Vector3.up * playerHeightOffset);
-                yield return new WaitForSeconds(idleJumpInterval);
-            }
+            // Sin puntos: se queda en el podio sin saltar (sin físicas)
+            Debug.Log($"[PodiumManager] {player.name} sin puntos, no salta.");
+            yield break;
         }
 
         // Calcular intervalo adaptado para no tardar demasiado si hay muchos puntos
@@ -238,49 +319,57 @@ public class PodiumManager : MonoBehaviour
         {
             Vector3 blockPos = basePos + Vector3.up * (i * blockHeight);
 
-            // Spawnear bloque local (no necesita NetworkObject, es visual de podio)
+            // Spawnear bloque local sin físicas: solo visual apilado, no desplazable
             GameObject block = Instantiate(blockPrefab, blockPos, Quaternion.identity);
             block.name = $"Tower_{player.OwnerClientId}_{i}";
-            // Asegurar escala
             block.transform.localScale = blockSize;
-            // Si es primitivo Cube, ajustar collider
+            MakeBlockStatic(block);
             spawnedBlocks.Add(block);
 
-            // Animar salto del jugador a la nueva altura
+            // Animar exactamente 1 salto por bloque hasta la nueva altura
             Vector3 targetPlayerPos = basePos + Vector3.up * (playerHeightOffset + (i + 1) * blockHeight);
             yield return AnimateJump(player, targetPlayerPos);
 
             yield return new WaitForSeconds(interval);
         }
 
-        // Torre terminada: salto idle periódico en la cima
-        Vector3 topPos = basePos + Vector3.up * (playerHeightOffset + totalBlocks * blockHeight);
-        while (true)
-        {
-            yield return AnimateJump(player, topPos);
-            yield return new WaitForSeconds(idleJumpInterval);
-        }
+        // Torre terminada: sin físicas, se queda en la cima sin más saltos (exactamente Score saltos)
+        Debug.Log($"[PodiumManager] {player.name} completó torre de {totalBlocks} bloques.");
+        // Sin bucle infinito: el jugador ya saltó totalBlocks veces
     }
 
     private GameObject ResolveBlockPrefab()
     {
         if (towerBlockPrefab != null) return towerBlockPrefab;
 
-        // Fallback: crear Cube primitivo con material simple
+        // Fallback: crear Cube primitivo sin físicas
         GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        // Quitar collider trigger innecesario si es solo visual, pero dejar BoxCollider como sólido de torre
+        MakeBlockStatic(cube);
         Renderer r = cube.GetComponent<Renderer>();
         if (r != null)
         {
-            // Color por ranking o por defecto
             r.material.color = new Color(0.95f, 0.85f, 0.4f);
         }
-        // Desactivar para que no interfiera como trigger de entrega
-        // Lo dejamos como prefab temporal: destruir el template tras clonar, usamos Instantiate
-        // Para evitar que el template quede en escena, lo desactivamos y lo usamos como prefab
         cube.SetActive(false);
         towerBlockPrefab = cube;
         return towerBlockPrefab;
+    }
+
+    private void MakeBlockStatic(GameObject block)
+    {
+        // Eliminar toda física: sin Rigidbody, sin InteractableCube/NetworkObject, collider solo estático no desplazable
+        Rigidbody rb = block.GetComponent<Rigidbody>();
+        if (rb != null) Destroy(rb);
+        // Si el prefab trae InteractableCube/Collectible, quitarlo para que no sea recolectable en podio
+        var interactable = block.GetComponent<InteractableCube>();
+        if (interactable != null) Destroy(interactable);
+        var netObj = block.GetComponent<Unity.Netcode.NetworkObject>();
+        if (netObj != null) Destroy(netObj);
+        // Asegurar que no sea trigger y no tenga físicas
+        Collider col = block.GetComponent<Collider>();
+        if (col != null) col.isTrigger = false;
+        // Desactivar gravedad/físicas implícitas: static
+        block.isStatic = true;
     }
 
     private IEnumerator AnimateJump(PlayerMovementManager player, Vector3 targetPos)
@@ -351,6 +440,7 @@ public class PodiumManager : MonoBehaviour
         if (blockHeight <= 0f) blockHeight = 0.5f;
         if (blockSpawnInterval <= 0f) blockSpawnInterval = 0.1f;
         if (fallbackSpacing <= 0f) fallbackSpacing = 3f;
+        if (cameraFollowThresholdBlocks < 0) cameraFollowThresholdBlocks = 0;
     }
 #endif
 }

@@ -74,19 +74,35 @@ public class LobbyPlayerDisplay : NetworkBehaviour
         }
     }
 
+    private void LateUpdate()
+    {
+        if (playerLabelText == null) return;
+        Camera cam = ResolveCamera();
+        if (cam == null) return;
+
+        // Solo en Podio el texto debe mirar siempre al frente de la cámara (paralelo al plano de vista)
+        // En Lobby/MainScene mantiene el billboard clásico hacia la posición de la cámara
+        string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+        bool isPodio = sceneName == "Podio" || sceneName == "Podium";
+
+        if (isPodio)
+        {
+            // Frente de cámara, independiente de la dirección final del jugador tras saltos
+            playerLabelText.transform.rotation = Quaternion.LookRotation(-cam.transform.forward, cam.transform.up);
+        }
+        else
+        {
+            Vector3 dir = playerLabelText.transform.position - cam.transform.position;
+            if (dir.sqrMagnitude > 0.0001f)
+                playerLabelText.transform.rotation = Quaternion.LookRotation(dir, Vector3.up);
+        }
+    }
+
     private void Update()
     {
-        // Hacer que el texto flotante siempre mire hacia la cámara que renderiza la vista (Billboard)
-        // Necesario en MainScene donde la cámara del jugador es PlayerCamera (no MainCamera)
-        if (playerLabelText != null)
+        if (playerLabelText != null && ResolveCamera() == null)
         {
-            Camera cam = ResolveCamera();
-            if (cam != null)
-            {
-                Vector3 dir = playerLabelText.transform.position - cam.transform.position;
-                if (dir.sqrMagnitude > 0.0001f)
-                    playerLabelText.transform.rotation = Quaternion.LookRotation(dir);
-            }
+            ResolveCamera();
         }
     }
 
