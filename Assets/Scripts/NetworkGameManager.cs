@@ -132,4 +132,42 @@ public class NetworkGameManager : MonoBehaviour
         gameStarted = false;
         Debug.Log("[NetworkGameManager] Estado del juego restablecido. Nuevas conexiones permitidas.");
     }
+
+    /// <summary>
+    /// Retorna a todos los jugadores conectados a la escena Lobby sin cerrar la conexión de red (exclusivo para Servidor/Host).
+    /// </summary>
+    public void ReturnAllToLobby()
+    {
+        ResetGame();
+
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening && NetworkManager.Singleton.IsServer)
+        {
+            Debug.Log($"[NetworkGameManager] Transicionando a todos los jugadores a la escena de Lobby: {lobbySceneName}");
+            NetworkManager.Singleton.SceneManager.LoadScene(lobbySceneName, LoadSceneMode.Single);
+        }
+        else
+        {
+            Debug.LogWarning("[NetworkGameManager] Solo el Servidor/Host puede regresar a todos los jugadores al Lobby.");
+        }
+    }
+
+    /// <summary>
+    /// Desconecta la sesión de red del jugador local y lo regresa a la escena de conexión principal.
+    /// </summary>
+    public void DisconnectLocalPlayer()
+    {
+        Debug.Log("[NetworkGameManager] Desconectando jugador local y regresando a la escena de conexión...");
+        ResetGame();
+
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+        {
+            NetworkManager.Singleton.Shutdown();
+        }
+
+        if (SceneManager.GetActiveScene().name != connectionSceneName)
+        {
+            SceneManager.LoadScene(connectionSceneName);
+        }
+    }
 }
+

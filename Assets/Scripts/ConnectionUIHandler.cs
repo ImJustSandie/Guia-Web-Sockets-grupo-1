@@ -9,6 +9,12 @@ public class ConnectionUIHandler : MonoBehaviour
     [Tooltip("Nombre de la escena de Lobby a la que el servidor/host cambiará automáticamente al iniciar.")]
     [SerializeField] private string lobbySceneName = "Lobby";
 
+    [Tooltip("Nombre de la escena de conexión para el cliente.")]
+    [SerializeField] private string clientSceneName = "ClientConnectScene";
+
+    [Tooltip("Nombre de la escena de personalización de personaje.")]
+    [SerializeField] private string customizationSceneName = "CustomizationScene";
+
     [Header("Network Connection Configuration")]
     [Tooltip("Campo de texto de TMP para ingresar la IP del servidor.")]
     [SerializeField] private TMP_InputField ipInputField;
@@ -19,7 +25,23 @@ public class ConnectionUIHandler : MonoBehaviour
     [Tooltip("Puerto de conexión.")]
     [SerializeField] private ushort port = 7777;
 
-    private void SetTargetIPAddress()
+    private void ConfigureHostConnectionData()
+    {
+        if (NetworkManager.Singleton == null) return;
+
+        var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+        if (transport == null)
+        {
+            Debug.LogWarning("[ConnectionUIHandler] UnityTransport no fue encontrado en el NetworkManager.");
+            return;
+        }
+
+        string localIP = LobbyUIHandler.GetLocalIPAddress();
+        transport.SetConnectionData(localIP, port, "0.0.0.0");
+        Debug.Log($"[ConnectionUIHandler] Host configurado en IP local: {localIP}:{port} (Escuchando en 0.0.0.0)");
+    }
+
+    private void ConfigureClientConnectionData()
     {
         if (NetworkManager.Singleton == null) return;
 
@@ -37,7 +59,7 @@ public class ConnectionUIHandler : MonoBehaviour
         }
 
         transport.SetConnectionData(targetIP, port);
-        Debug.Log($"[ConnectionUIHandler] IP de conexión configurada a: {targetIP}:{port}");
+        Debug.Log($"[ConnectionUIHandler] Cliente configurado para conectar a: {targetIP}:{port}");
     }
 
     private void Start()
@@ -82,7 +104,7 @@ public class ConnectionUIHandler : MonoBehaviour
             NetworkManager.Singleton.Shutdown();
         }
 
-        SetTargetIPAddress();
+        ConfigureHostConnectionData();
 
         if (NetworkGameManager.Instance != null)
         {
@@ -111,7 +133,7 @@ public class ConnectionUIHandler : MonoBehaviour
             NetworkManager.Singleton.Shutdown();
         }
 
-        SetTargetIPAddress();
+        ConfigureClientConnectionData();
         NetworkManager.Singleton.StartClient();
     }
 
@@ -123,7 +145,12 @@ public class ConnectionUIHandler : MonoBehaviour
             return;
         }
 
-        SetTargetIPAddress();
+        if (NetworkManager.Singleton.IsListening)
+        {
+            NetworkManager.Singleton.Shutdown();
+        }
+
+        ConfigureHostConnectionData();
 
         if (NetworkGameManager.Instance != null)
         {
@@ -137,6 +164,24 @@ public class ConnectionUIHandler : MonoBehaviour
         {
             NetworkManager.Singleton.SceneManager.LoadScene(lobbySceneName, UnityEngine.SceneManagement.LoadSceneMode.Single);
         }
+    }
+
+    /// <summary>
+    /// Cambia a la escena de conexión del cliente donde se puede ingresar la IP.
+    /// </summary>
+    public void OpenClientScene()
+    {
+        Debug.Log($"[ConnectionUIHandler] Cambiando a la escena del cliente: {clientSceneName}");
+        UnityEngine.SceneManagement.SceneManager.LoadScene(clientSceneName);
+    }
+
+    /// <summary>
+    /// Cambia a la escena de personalización de personaje.
+    /// </summary>
+    public void OpenCustomizationScene()
+    {
+        Debug.Log($"[ConnectionUIHandler] Cambiando a la escena de personalización: {customizationSceneName}");
+        UnityEngine.SceneManagement.SceneManager.LoadScene(customizationSceneName);
     }
 }
 

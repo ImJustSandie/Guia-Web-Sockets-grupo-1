@@ -1,17 +1,27 @@
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using Unity.Netcode;
+using Unity.Netcode.Transports.UTP;
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 
 /// <summary>
 /// Gestiona la interfaz de usuario de la escena Lobby.
-/// Muestra el numero de jugadores conectados y el boton de inicio de juego (exclusivo para el Host/Servidor).
+/// Muestra el numero de jugadores conectados, la IP de conexion y el boton de inicio de juego (exclusivo para el Host/Servidor).
 /// </summary>
 public class LobbyUIHandler : MonoBehaviour
 {
     [Header("UI Elements")]
     [Tooltip("Texto TMP para mostrar el numero de jugadores conectados.")]
     [SerializeField] private TMP_Text playerCountText;
+
+    [Tooltip("Texto TMP para mostrar la IP del servidor/host al que se está conectado.")]
+    [SerializeField] private TMP_Text ipAddressText;
+
+    [Tooltip("Formato del texto de la IP. {0} representa la IP y {1} el puerto.")]
+    [SerializeField] private string ipTextFormat = "IP: {0}";
 
     [Tooltip("Boton para iniciar la partida.")]
     [SerializeField] private Button startGameButton;
@@ -42,6 +52,7 @@ public class LobbyUIHandler : MonoBehaviour
 
         // Configurar la UI inicial
         UpdatePlayerCountUI();
+        UpdateConnectionIPUI();
         ConfigureStartButton();
         ConfigureBackButton();
     }
@@ -76,12 +87,14 @@ public class LobbyUIHandler : MonoBehaviour
     {
         Debug.Log($"[LobbyUIHandler] Cliente conectado con ID: {clientId}");
         UpdatePlayerCountUI();
+        UpdateConnectionIPUI();
     }
 
     private void OnClientDisconnected(ulong clientId)
     {
         Debug.Log($"[LobbyUIHandler] Cliente desconectado con ID: {clientId}");
         UpdatePlayerCountUI();
+        UpdateConnectionIPUI();
 
         // Si el cliente desconectado es el cliente local (o el host cerró la conexión)
         if (NetworkManager.Singleton != null && clientId == NetworkManager.Singleton.LocalClientId && !NetworkManager.Singleton.IsHost)
@@ -108,6 +121,125 @@ public class LobbyUIHandler : MonoBehaviour
         }
 
         playerCountText.text = count.ToString();
+    }
+
+    /// <summary>
+    /// Actualiza el texto TMP con la dirección IP local activa o la del Host conectado.
+    /// </summary>
+    private void UpdateConnectionIPUI()
+    {
+        if (ipAddressText == null) return;
+
+        string address = GetLocalIPAddress();
+        ushort port = 7777;
+
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+        {
+            var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+            if (transport != null)
+            {
+                port = transport.ConnectionData.Port;
+
+                // Si es Cliente (no Server/Host) y tiene una IP asignada distinta de 0.0.0.0 o 127.0.0.1, mostramos la IP a la que se conectó
+                if (!NetworkManager.Singleton.IsServer)
+                {
+                    string targetAddress = transport.ConnectionData.Address;
+                    if (!string.IsNullOrEmpty(targetAddress) && targetAddress != "0.0.0.0" && targetAddress != "127.0.0.1")
+                    {
+                        address = targetAddress;
+                    }
+                }
+            }
+        }
+
+        try
+        {
+            ipAddressText.text = string.Format(ipTextFormat, address, port);
+        }
+        catch
+        {
+            ipAddressText.text = $"IP: {address}";
+        }
+    }
+
+    /// <summary>
+    /// Obtiene la dirección IPv4 local activa del dispositivo (Wi-Fi / Red local).
+    /// </summary>
+    /// <returns>Dirección IPv4 en formato string o 127.0.0.1 en caso de error.</returns>
+    public static string GetLocalIPAddress()
+    {
+        // 1. Método con Socket UDP dummy (muy rápido y efectivo en Android/iOS/Windows para detectar la interfaz de salida activa)
+        try
+        {
+            using (Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, 0))
+            {
+                socket.Connect("8.8.8.8", 65530);
+                if (socket.LocalEndPoint is IPEndPoint endPoint)
+                {
+                    string ipStr = endPoint.Address.ToString();
+                    if (!ipStr.StartsWith("127.") && !ipStr.StartsWith("169.254."))
+                    {
+                        return ipStr;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Ignorar y pasar al siguiente método si falla (ej. sin conexión externa)
+        }
+
+        // 2. Método de escaneo de interfaces de red activas
+        try
+        {
+            foreach (NetworkInterface item in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (item.OperationalStatus == OperationalStatus.Up &&
+                    item.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+                {
+                    IPInterfaceProperties adapterProperties = item.GetIPProperties();
+                    foreach (UnicastIPAddressInformation ip in adapterProperties.UnicastAddresses)
+                    {
+                        if (ip.Address.AddressFamily == AddressFamily.InterNetwork)
+                        {
+                            string addressStr = ip.Address.ToString();
+                            if (!addressStr.StartsWith("127.") && !addressStr.StartsWith("169.254."))
+                            {
+                                return addressStr;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Ignorar y pasar al fallback DNS
+        }
+
+        // 3. Fallback mediante DNS Host Entry
+        try
+        {
+            string hostName = Dns.GetHostName();
+            IPHostEntry hostEntry = Dns.GetHostEntry(hostName);
+            foreach (IPAddress ip in hostEntry.AddressList)
+            {
+                if (ip.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    string addressStr = ip.ToString();
+                    if (!addressStr.StartsWith("127.") && !addressStr.StartsWith("169.254."))
+                    {
+                        return addressStr;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Ignorar
+        }
+
+        return "127.0.0.1";
     }
 
     /// <summary>
@@ -146,20 +278,21 @@ public class LobbyUIHandler : MonoBehaviour
     /// </summary>
     public void OnBackButtonClicked()
     {
-        Debug.Log("[LobbyUIHandler] Regresando a la escena de conexión...");
-
         if (NetworkGameManager.Instance != null)
         {
-            NetworkGameManager.Instance.ResetGame();
+            NetworkGameManager.Instance.DisconnectLocalPlayer();
         }
-
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+        else
         {
-            NetworkManager.Singleton.Shutdown();
+            Debug.Log("[LobbyUIHandler] Regresando a la escena de conexión...");
+            if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
+            {
+                NetworkManager.Singleton.Shutdown();
+            }
+            UnityEngine.SceneManagement.SceneManager.LoadScene(connectionSceneName);
         }
-
-        UnityEngine.SceneManagement.SceneManager.LoadScene(connectionSceneName);
     }
+
 
     /// <summary>
     /// Metodo ejecutado al pulsar el boton "Jugar".

@@ -57,11 +57,25 @@ public class PlayerMovementManager : NetworkBehaviour
     public bool CanCollect => CollectedCount < maxCollected;
     public bool IsInventoryFull => CollectedCount >= maxCollected;
     public int Score => deliveredScore.Value;
+    public float MoveSpeed { get => moveSpeed; set => moveSpeed = value; }
+
+    public void SetMoveSpeed(float newSpeed)
+    {
+        moveSpeed = newSpeed;
+    }
+
 
     private bool lastCarrying;
     private int lastCollectedCount = -1;
     private int lastScore = -1;
     private PlayerNetworkState lastPublishedPlayerState;
+    [SerializeField] private float gravity = -9.81f;
+    private float verticalVelocity;
+
+    [Header("Scene Camera Settings")]
+    [Tooltip("Nombre de la escena de Lobby donde la cámara del personaje debe permanecer desactivada.")]
+    [SerializeField] private string lobbySceneName = "Lobby";
+
     private bool hasPublishedPlayerState;
 
     private CharacterController characterController;
@@ -76,6 +90,7 @@ public class PlayerMovementManager : NetworkBehaviour
     {
         base.OnNetworkSpawn();
         EnsureCharacterController();
+        UpdateCameraState();
         ResolveCameraTransform();
         collectedCount.OnValueChanged += OnCollectedCountChanged;
         deliveredScore.OnValueChanged += OnScoreChanged;
@@ -93,22 +108,10 @@ public class PlayerMovementManager : NetworkBehaviour
                 camController.enabled = true;
                 camController.SetTarget(transform);
             }
-            // Asegurar cámara y audio del owner activos
-            Camera cam = GetComponentInChildren<Camera>(true);
-            if (cam != null) cam.enabled = true;
-            AudioListener listener = GetComponentInChildren<AudioListener>(true);
-            if (listener != null) listener.enabled = true;
             if (characterController != null) characterController.enabled = true;
         }
         else
         {
-            // Desactivar cámara local si está como hija o asociada a este avatar no-local
-            Camera cam = GetComponentInChildren<Camera>(true);
-            if (cam != null) cam.enabled = false;
-
-            AudioListener listener = GetComponentInChildren<AudioListener>(true);
-            if (listener != null) listener.enabled = false;
-
             CameraYawPitchDragController camController = GetComponentInChildren<CameraYawPitchDragController>(true);
             if (camController != null) camController.enabled = false;
 
@@ -142,12 +145,69 @@ public class PlayerMovementManager : NetworkBehaviour
 
     private void OnEnable()
     {
+        UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
+
         if (interactButton != null)
             interactButton.onClick.AddListener(OnInteractButtonPressed);
 
-        if (IsSpawned && IsOwner)
+        if (IsSpawned)
         {
-            SetupInputActions();
+            UpdateCameraState();
+            if (IsOwner)
+            {
+                SetupInputActions();
+            }
+        }
+    }
+
+    private void OnDisable()
+    {
+        UnityEngine.SceneManagement.SceneManager.sceneLoaded -= OnSceneLoaded;
+
+        if (interactButton != null)
+            interactButton.onClick.RemoveListener(OnInteractButtonPressed);
+        if (moveAction != null)
+        {
+            moveAction.Disable();
+            moveAction = null;
+        }
+
+        if (interactAction != null)
+        {
+            interactAction.performed -= HandleInteract;
+            interactAction.Disable();
+            interactAction = null;
+        }
+    }
+
+    private void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene, UnityEngine.SceneManagement.LoadSceneMode mode)
+    {
+        UpdateCameraState();
+        ResolveCameraTransform();
+    }
+
+    /// <summary>
+    /// Activa o desactiva la cámara del personaje según la escena activa y la autoridad (IsOwner).
+    /// En el Lobby la cámara del personaje siempre está desactivada para usar la Main Camera del Lobby.
+    /// En el juego (MainScene) la cámara se activa únicamente para el jugador local (IsOwner).
+    /// </summary>
+    private void UpdateCameraState()
+    {
+        string currentScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+        bool inLobby = (currentScene == lobbySceneName);
+
+        Camera cam = GetComponentInChildren<Camera>(true);
+        AudioListener listener = GetComponentInChildren<AudioListener>(true);
+
+        if (!IsOwner || inLobby)
+        {
+            if (cam != null) cam.enabled = false;
+            if (listener != null) listener.enabled = false;
+        }
+        else
+        {
+            if (cam != null) cam.enabled = true;
+            if (listener != null) listener.enabled = true;
         }
     }
 
@@ -178,22 +238,34 @@ public class PlayerMovementManager : NetworkBehaviour
         PublishPlayerState(true);
     }
 
-    private void OnDisable()
+    private Transform ResolveCameraTransform()
     {
-        if (interactButton != null)
-            interactButton.onClick.RemoveListener(OnInteractButtonPressed);
-        if (moveAction != null)
+        if (cameraTransform != null) return cameraTransform;
+
+        // Prioridad 1: Cámara principal de la escena (Camera.main)
+        if (Camera.main != null)
         {
-            moveAction.Disable();
-            moveAction = null;
+            cameraTransform = Camera.main.transform;
+            return cameraTransform;
         }
 
-        if (interactAction != null)
+        // Prioridad 2: Cámara hija del propio jugador (PlayerCamera del prefab)
+        if (cachedPlayerCamera == null)
+            cachedPlayerCamera = GetComponentInChildren<Camera>(true);
+        if (cachedPlayerCamera != null && cachedPlayerCamera.enabled)
         {
-            interactAction.performed -= HandleInteract;
-            interactAction.Disable();
-            interactAction = null;
+            cameraTransform = cachedPlayerCamera.transform;
+            return cameraTransform;
         }
+
+        Camera anyCam = FindFirstObjectByType<Camera>();
+        if (anyCam != null)
+        {
+            cameraTransform = anyCam.transform;
+            return cameraTransform;
+        }
+
+        return null;
     }
 
     private void Update()
@@ -237,10 +309,23 @@ public class PlayerMovementManager : NetworkBehaviour
                 right.Normalize();
         }
 
+        if (characterController != null && characterController.enabled)
+        {
+            if (characterController.isGrounded && verticalVelocity < 0f)
+            {
+                verticalVelocity = -2f;
+            }
+            else
+            {
+                verticalVelocity += gravity * Time.deltaTime;
+            }
+        }
+
         Vector3 direction = right * input.x + forward * input.y;
         if (direction.sqrMagnitude > 1f) direction.Normalize();
 
         Vector3 velocity = direction * moveSpeed;
+        velocity.y = verticalVelocity;
 
         if (characterController != null && characterController.enabled)
         {
@@ -291,34 +376,7 @@ public class PlayerMovementManager : NetworkBehaviour
         }
     }
 
-    private Transform ResolveCameraTransform()
-    {
-        if (cameraTransform != null) return cameraTransform;
 
-        // Prioridad 1: cámara hija del propio jugador (PlayerCamera del prefab)
-        if (cachedPlayerCamera == null)
-            cachedPlayerCamera = GetComponentInChildren<Camera>(true);
-        if (cachedPlayerCamera != null)
-        {
-            cameraTransform = cachedPlayerCamera.transform;
-            return cameraTransform;
-        }
-
-        if (Camera.main != null)
-        {
-            cameraTransform = Camera.main.transform;
-            return cameraTransform;
-        }
-
-        Camera anyCam = FindFirstObjectByType<Camera>();
-        if (anyCam != null)
-        {
-            cameraTransform = anyCam.transform;
-            return cameraTransform;
-        }
-
-        return null;
-    }
 
     /// <summary>Llamado por el joystick virtual (evento Vector2) para mover al jugador.</summary>
     public void SetVirtualMove(Vector2 input)

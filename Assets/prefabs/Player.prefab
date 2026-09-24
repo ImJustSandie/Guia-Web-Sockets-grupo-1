@@ -510,7 +510,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::PlayerMovementManager
   ShowTopMostFoldoutHeaderGroup: 1
   actionsAsset: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
-  moveSpeed: 10
+  moveSpeed: 20
   onInteract:
     m_PersistentCalls:
       m_Calls:
@@ -532,6 +532,8 @@ MonoBehaviour:
   faceMoveDirection: 1
   turnSpeed: 10
   maxCollected: 5
+  gravity: 0
+  lobbySceneName: Lobby
 --- !u!114 &6879259335654345081
 MonoBehaviour:
   m_ObjectHideFlags: 0
