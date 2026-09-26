@@ -84,6 +84,12 @@ public class PlayerMovementManager : NetworkBehaviour
     private void Awake()
     {
         EnsureCharacterController();
+        UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
+    }
+
+    private void OnDestroy()
+    {
+        UnityEngine.SceneManagement.SceneManager.sceneLoaded -= OnSceneLoaded;
     }
 
     public override void OnNetworkSpawn()
@@ -145,8 +151,6 @@ public class PlayerMovementManager : NetworkBehaviour
 
     private void OnEnable()
     {
-        UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
-
         if (interactButton != null)
             interactButton.onClick.AddListener(OnInteractButtonPressed);
 
@@ -162,8 +166,6 @@ public class PlayerMovementManager : NetworkBehaviour
 
     private void OnDisable()
     {
-        UnityEngine.SceneManagement.SceneManager.sceneLoaded -= OnSceneLoaded;
-
         if (interactButton != null)
             interactButton.onClick.RemoveListener(OnInteractButtonPressed);
         if (moveAction != null)
@@ -182,8 +184,33 @@ public class PlayerMovementManager : NetworkBehaviour
 
     private void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene, UnityEngine.SceneManagement.LoadSceneMode mode)
     {
+        // Limpiar referencia cacheada de cámara de la escena anterior para forzar re-resolución
+        cameraTransform = null;
+
+        // Si el PodiumManager desactivó este componente, reactivarlo al entrar en una nueva escena
+        if (!enabled)
+        {
+            enabled = true;
+            Debug.Log($"[PlayerMovementManager] {name} re-activado al cargar escena {scene.name}");
+        }
+
         UpdateCameraState();
         ResolveCameraTransform();
+
+        // Re-activar el controlador de cámara si fue desactivado (ej. por PodiumManager)
+        if (IsOwner)
+        {
+            CameraYawPitchDragController camController = GetComponentInChildren<CameraYawPitchDragController>(true);
+            if (camController != null)
+            {
+                string currentScene = scene.name;
+                bool inLobby = (currentScene == lobbySceneName);
+                camController.enabled = !inLobby;
+                if (!inLobby) camController.SetTarget(transform);
+            }
+
+            SetupInputActions();
+        }
     }
 
     /// <summary>
@@ -208,6 +235,25 @@ public class PlayerMovementManager : NetworkBehaviour
         {
             if (cam != null) cam.enabled = true;
             if (listener != null) listener.enabled = true;
+        }
+
+        // Habilitar/deshabilitar los Canvases e interfaz del jugador según si es el dueño y está en partida (no en lobby)
+        bool showUI = IsOwner && !inLobby;
+
+        Canvas[] playerCanvases = GetComponentsInChildren<Canvas>(true);
+        foreach (Canvas c in playerCanvases)
+        {
+            c.enabled = showUI;
+        }
+
+        if (virtualMovePadObject != null)
+        {
+            virtualMovePadObject.SetActive(showUI);
+        }
+
+        if (interactButton != null)
+        {
+            interactButton.gameObject.SetActive(showUI);
         }
     }
 

@@ -9,23 +9,56 @@ public class PlayerSpawnSetter : NetworkBehaviour
     [Tooltip("Altura extra sobre el SpawnPoint para evitar que el CharacterController se entierre en el suelo.")]
     [SerializeField] private float spawnHeightOffset = 0.15f;
 
-    private bool spawnApplied;
+    private void Awake()
+    {
+        UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
+    }
+
+    private void OnDestroy()
+    {
+        UnityEngine.SceneManagement.SceneManager.sceneLoaded -= OnSceneLoaded;
+        UnsubscribeFromSceneManager();
+    }
 
     public override void OnNetworkSpawn()
     {
-        if (!IsServer) return;
-
-        // Intentar posicionar ahora. Si la escena aún no cargó (el host
-        // spawna al jugador ANTES de llamar a LoadScene), el SpawnPoint
-        // no existirá todavía. En ese caso nos suscribimos al evento de
-        // carga de escena para reintentar.
-        if (!TryApplySpawnPosition())
+        base.OnNetworkSpawn();
+        if (IsServer)
         {
-            NetworkManager.Singleton.SceneManager.OnLoadComplete += OnSceneLoadComplete;
+            if (!TryApplySpawnPosition())
+            {
+                SubscribeToSceneManager();
+            }
         }
     }
 
     public override void OnNetworkDespawn()
+    {
+        UnsubscribeFromSceneManager();
+        base.OnNetworkDespawn();
+    }
+
+    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        if (!IsServer) return;
+
+        // Cada vez que se carga una escena (ej. MainScene de nuevo), intentar re-posicionar
+        if (!TryApplySpawnPosition())
+        {
+            SubscribeToSceneManager();
+        }
+    }
+
+    private void SubscribeToSceneManager()
+    {
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.SceneManager != null)
+        {
+            NetworkManager.Singleton.SceneManager.OnLoadComplete -= OnSceneLoadComplete;
+            NetworkManager.Singleton.SceneManager.OnLoadComplete += OnSceneLoadComplete;
+        }
+    }
+
+    private void UnsubscribeFromSceneManager()
     {
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.SceneManager != null)
         {
@@ -35,24 +68,19 @@ public class PlayerSpawnSetter : NetworkBehaviour
 
     private void OnSceneLoadComplete(ulong clientId, string sceneName, LoadSceneMode loadSceneMode)
     {
-        if (spawnApplied) return;
-
-        // Solo reaccionar cuando el servidor/host termina de cargar la escena,
-        // que es cuando el SpawnPoint ya existe localmente.
-        if (clientId != NetworkManager.ServerClientId) return;
+        if (!IsServer) return;
 
         if (TryApplySpawnPosition())
         {
-            NetworkManager.Singleton.SceneManager.OnLoadComplete -= OnSceneLoadComplete;
+            UnsubscribeFromSceneManager();
         }
     }
 
-    private bool TryApplySpawnPosition()
+    public bool TryApplySpawnPosition()
     {
         GameObject spawnPointObj = GameObject.Find(spawnPointObjectName);
         if (spawnPointObj == null)
         {
-            Debug.Log($"[PlayerSpawnSetter] SpawnPoint '{spawnPointObjectName}' no encontrado aún, se reintentará tras la carga de escena.");
             return false;
         }
 
@@ -70,8 +98,7 @@ public class PlayerSpawnSetter : NetworkBehaviour
             TeleportOwnerToSpawnRpc(spawnPos, spawnRot);
         }
 
-        spawnApplied = true;
-        Debug.Log($"[PlayerSpawnSetter] Jugador {OwnerClientId} posicionado en {spawnPos}");
+        Debug.Log($"[PlayerSpawnSetter] Jugador {OwnerClientId} posicionado en SpawnPoint {spawnPos} en la escena {SceneManager.GetActiveScene().name}");
         return true;
     }
 
@@ -89,6 +116,6 @@ public class PlayerSpawnSetter : NetworkBehaviour
         transform.position = position;
         transform.rotation = rotation;
 
-        if (cc != null) cc.enabled = true;
+        if (cc != null && IsOwner) cc.enabled = true;
     }
 }

@@ -52,6 +52,7 @@ public class CanvasCameraAssigner : MonoBehaviour
 
     /// <summary>
     /// Asigna la cámara principal activa al Canvas.
+    /// En la escena de juego busca primero la PlayerCamera del jugador local (IsOwner).
     /// </summary>
     public void AssignCamera()
     {
@@ -60,6 +61,27 @@ public class CanvasCameraAssigner : MonoBehaviour
 
         if (targetCanvas == null || targetCanvas.renderMode != RenderMode.ScreenSpaceCamera)
             return;
+
+        // En escenas de juego (no Lobby), intentar encontrar la cámara del jugador local
+        string currentScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+        bool inLobby = (currentScene == lobbySceneName);
+
+        if (!inLobby)
+        {
+            // Buscar la PlayerCamera del jugador local (IsOwner) que esté habilitada
+            foreach (var pm in FindObjectsByType<PlayerMovementManager>(FindObjectsSortMode.None))
+            {
+                if (pm.IsOwner)
+                {
+                    Camera playerCam = pm.GetComponentInChildren<Camera>(true);
+                    if (playerCam != null && playerCam.enabled)
+                    {
+                        targetCanvas.worldCamera = playerCam;
+                        return;
+                    }
+                }
+            }
+        }
 
         Camera mainCam = Camera.main;
         if (mainCam != null)

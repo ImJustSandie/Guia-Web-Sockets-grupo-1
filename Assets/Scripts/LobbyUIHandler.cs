@@ -21,7 +21,7 @@ public class LobbyUIHandler : MonoBehaviour
     [SerializeField] private TMP_Text ipAddressText;
 
     [Tooltip("Formato del texto de la IP. {0} representa la IP y {1} el puerto.")]
-    [SerializeField] private string ipTextFormat = "IP: {0}";
+    [SerializeField] private string ipTextFormat = "{0}";
 
     [Tooltip("Boton para iniciar la partida.")]
     [SerializeField] private Button startGameButton;
@@ -158,7 +158,7 @@ public class LobbyUIHandler : MonoBehaviour
         }
         catch
         {
-            ipAddressText.text = $"IP: {address}";
+            ipAddressText.text = address;
         }
     }
 

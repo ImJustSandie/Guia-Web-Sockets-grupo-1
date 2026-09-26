@@ -110,11 +110,29 @@ public class MatchTimerManager : NetworkBehaviour
 
     private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
+        // Al volver al Lobby, restablecer hasEnded para que la siguiente partida pueda iniciar el timer
+        if (NetworkGameManager.Instance != null && scene.name == NetworkGameManager.Instance.LobbySceneName)
+        {
+            hasEnded = false;
+            localRunning = false;
+            localRemainingTime = matchDuration;
+            if (IsSpawned && IsServer)
+            {
+                timerRunning.Value = false;
+                remainingTime.Value = matchDuration;
+            }
+            Debug.Log("[MatchTimerManager] Estado restablecido al volver al Lobby.");
+            return;
+        }
+
         // Solo el servidor inicia el timer al cargar MainScene
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening && !NetworkManager.Singleton.IsServer) return;
 
         if (scene.name == mainSceneName && autoStartOnMainScene)
+        {
+            hasEnded = false; // Resetear por si se vuelve a MainScene tras Podio
             Invoke(nameof(TryStartTimerFallback), 1f);
+        }
         else if (scene.name == podiumSceneName)
         {
             if (IsSpawned && IsServer) timerRunning.Value = false;
