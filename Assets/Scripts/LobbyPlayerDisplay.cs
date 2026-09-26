@@ -26,16 +26,64 @@ public class LobbyPlayerDisplay : NetworkBehaviour
     [Tooltip("Offset horizontal si no se encuentran los LobbySlots en la escena.")]
     [SerializeField] private float fallbackSlotOffset = 2.0f;
 
+    [Header("Lobby Scale")]
+    [Tooltip("Escala personalizada que adoptará el personaje mientras esté en la escena de Lobby.")]
+    [SerializeField] private Vector3 lobbyScale = new Vector3(1.5f, 1.5f, 1.5f);
+
+    [Tooltip("Si es true, el personaje restaurará su escala original al salir del Lobby hacia otra escena.")]
+    [SerializeField] private bool restoreOriginalScaleOnExit = true;
+
     private Camera mainCamera;
 
     private bool positionApplied = false;
+    private Vector3 originalScale = Vector3.one;
+    private bool hasStoredOriginalScale = false;
+
+    private readonly NetworkVariable<int> assignedSlotIndex = new NetworkVariable<int>(-1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
+
+    public int PlayerSlotIndex => GetSlotIndex();
+
+    public int GetSlotIndex()
+    {
+        if (assignedSlotIndex.Value >= 0)
+        {
+            return assignedSlotIndex.Value;
+        }
+
+        if (NetworkGameManager.Instance != null)
+        {
+            return NetworkGameManager.Instance.GetPlayerSlot(OwnerClientId);
+        }
+
+        return (int)(OwnerClientId % 4);
+    }
+
+    private void Awake()
+    {
+        StoreOriginalScale();
+    }
 
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
 
-        // Actualizar la etiqueta del jugador (número de jugador: OwnerClientId + 1)
+        StoreOriginalScale();
+
+        if (IsServer)
+        {
+            int slot = NetworkGameManager.Instance != null 
+                ? NetworkGameManager.Instance.GetOrAssignPlayerSlot(OwnerClientId) 
+                : (int)(OwnerClientId % 4);
+            assignedSlotIndex.Value = slot;
+        }
+
+        assignedSlotIndex.OnValueChanged += OnSlotIndexChanged;
+
+        // Actualizar la etiqueta del jugador (número de jugador: SlotIndex + 1)
         UpdatePlayerLabel();
+
+        // Aplicar la escala según la escena activa
+        UpdateScaleForCurrentScene(SceneManager.GetActiveScene().name);
 
         // Suscribirse a eventos de carga de escena por si la escena actual aún está cargando
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.SceneManager != null)
@@ -50,6 +98,7 @@ public class LobbyPlayerDisplay : NetworkBehaviour
 
     public override void OnNetworkDespawn()
     {
+        assignedSlotIndex.OnValueChanged -= OnSlotIndexChanged;
         base.OnNetworkDespawn();
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.SceneManager != null)
         {
@@ -58,8 +107,24 @@ public class LobbyPlayerDisplay : NetworkBehaviour
         UnityEngine.SceneManagement.SceneManager.sceneLoaded -= OnUnitySceneLoaded;
     }
 
+    private void OnSlotIndexChanged(int previous, int current)
+    {
+        UpdatePlayerLabel();
+        TryUpdateLobbyPosition();
+    }
+
+    private void StoreOriginalScale()
+    {
+        if (!hasStoredOriginalScale)
+        {
+            originalScale = transform.localScale;
+            hasStoredOriginalScale = true;
+        }
+    }
+
     private void OnLoadComplete(ulong clientId, string sceneName, LoadSceneMode loadSceneMode)
     {
+        UpdateScaleForCurrentScene(sceneName);
         if (sceneName == lobbySceneName)
         {
             TryUpdateLobbyPosition();
@@ -68,9 +133,22 @@ public class LobbyPlayerDisplay : NetworkBehaviour
 
     private void OnUnitySceneLoaded(Scene scene, LoadSceneMode mode)
     {
+        UpdateScaleForCurrentScene(scene.name);
         if (scene.name == lobbySceneName)
         {
             TryUpdateLobbyPosition();
+        }
+    }
+
+    private void UpdateScaleForCurrentScene(string sceneName)
+    {
+        if (sceneName == lobbySceneName)
+        {
+            transform.localScale = lobbyScale;
+        }
+        else if (restoreOriginalScaleOnExit)
+        {
+            transform.localScale = originalScale;
         }
     }
 
@@ -100,6 +178,11 @@ public class LobbyPlayerDisplay : NetworkBehaviour
 
     private void Update()
     {
+        if (!positionApplied && SceneManager.GetActiveScene().name == lobbySceneName)
+        {
+            TryUpdateLobbyPosition();
+        }
+
         if (playerLabelText != null && ResolveCamera() == null)
         {
             ResolveCamera();
@@ -162,8 +245,8 @@ public class LobbyPlayerDisplay : NetworkBehaviour
     {
         if (playerLabelText == null) return;
 
-        // El número de jugador es 1-indexed (OwnerClientId + 1)
-        int playerNumber = (int)OwnerClientId + 1;
+        // El número de jugador es 1-indexed (SlotIndex + 1)
+        int playerNumber = GetSlotIndex() + 1;
         playerLabelText.text = string.Format(labelFormat, playerNumber);
     }
 
@@ -178,20 +261,80 @@ public class LobbyPlayerDisplay : NetworkBehaviour
         GameObject slotsContainer = GameObject.Find(lobbySlotsObjectName);
         Vector3 targetPosition = Vector3.zero;
         Quaternion targetRotation = Quaternion.identity;
+        bool foundSlot = false;
 
-        int slotIndex = (int)(OwnerClientId % 4);
+        int slotIndex = GetSlotIndex();
 
-        if (slotsContainer != null && slotsContainer.transform.childCount > slotIndex)
+        // 1. Intentar buscar dentro del contenedor principal (LobbySlots)
+        if (slotsContainer != null)
         {
-            Transform slot = slotsContainer.transform.GetChild(slotIndex);
-            targetPosition = slot.position;
-            targetRotation = slot.rotation;
+            if (slotsContainer.transform.childCount > slotIndex)
+            {
+                Transform slot = slotsContainer.transform.GetChild(slotIndex);
+                targetPosition = slot.position;
+                targetRotation = slot.rotation;
+                foundSlot = true;
+            }
+            else
+            {
+                string[] possibleChildNames = new string[]
+                {
+                    $"Slot_{slotIndex}",
+                    $"Slot_{slotIndex + 1}",
+                    $"Slot{slotIndex + 1}",
+                    $"Slot {slotIndex + 1}",
+                    $"LobbySlot_{slotIndex}",
+                    $"LobbySlot_{slotIndex + 1}",
+                    $"LobbySlot{slotIndex + 1}"
+                };
+
+                foreach (string cName in possibleChildNames)
+                {
+                    Transform childSlot = slotsContainer.transform.Find(cName);
+                    if (childSlot != null)
+                    {
+                        targetPosition = childSlot.position;
+                        targetRotation = childSlot.rotation;
+                        foundSlot = true;
+                        break;
+                    }
+                }
+            }
         }
-        else if (slotsContainer == null)
+
+        // 2. Intentar buscar por nombre de objeto global en la escena
+        if (!foundSlot)
         {
-            // Si los slots aún no existen en la escena, reintentar más tarde
+            string[] possibleGlobalNames = new string[]
+            {
+                $"Slot_{slotIndex}",
+                $"Slot_{slotIndex + 1}",
+                $"Slot{slotIndex + 1}",
+                $"LobbySlot_{slotIndex}",
+                $"LobbySlot_{slotIndex + 1}",
+                $"LobbySlot{slotIndex + 1}"
+            };
+
+            foreach (string gName in possibleGlobalNames)
+            {
+                GameObject gObj = GameObject.Find(gName);
+                if (gObj != null)
+                {
+                    targetPosition = gObj.transform.position;
+                    targetRotation = gObj.transform.rotation;
+                    foundSlot = true;
+                    break;
+                }
+            }
+        }
+
+        // 3. Fallback solo si no existe ningún slot configurado en la escena
+        if (!foundSlot)
+        {
             targetPosition = new Vector3(slotIndex * fallbackSlotOffset, 0f, 0f);
         }
+
+        Debug.Log($"[LobbyPlayerDisplay] Jugador {OwnerClientId} (Slot {slotIndex}): Encontró slot real={foundSlot}, Posición={targetPosition}");
 
         ApplyPosition(targetPosition, targetRotation);
 
@@ -202,8 +345,8 @@ public class LobbyPlayerDisplay : NetworkBehaviour
             TeleportLobbyOwnerRpc(targetPosition, targetRotation);
         }
 
-        positionApplied = true;
-        return true;
+        positionApplied = foundSlot;
+        return foundSlot;
     }
 
     [Rpc(SendTo.Owner)]
@@ -220,6 +363,9 @@ public class LobbyPlayerDisplay : NetworkBehaviour
         transform.position = position;
         transform.rotation = rotation;
 
-        if (cc != null) cc.enabled = true;
+        if (cc != null && SceneManager.GetActiveScene().name != lobbySceneName)
+        {
+            cc.enabled = true;
+        }
     }
 }

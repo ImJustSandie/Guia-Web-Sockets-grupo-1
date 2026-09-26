@@ -12,6 +12,33 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6cdab54806f426b4db381390c2390a80, type: 3}
   m_Name: CharacterSkinDatabase
   m_EditorClassIdentifier: Assembly-CSharp::CharacterSkinDatabase
-  hatSkins: []
-  bodySkins: []
-  bagSkins: []
+  hatSkins:
+  - id: gorra_01
+    displayName: 
+    material: {fileID: 2100000, guid: 8245ac975c6733646a150eda7ff069d0, type: 2}
+  - id: gorra_02
+    displayName: 
+    material: {fileID: 2100000, guid: f991cea0bea3f1b4caa11d22ca67f6d5, type: 2}
+  - id: gorra_03
+    displayName: 
+    material: {fileID: 2100000, guid: d984c373f7bbf234898ad417fb963654, type: 2}
+  bodySkins:
+  - id: chaleco_01
+    displayName: 
+    material: {fileID: 2100000, guid: 8245ac975c6733646a150eda7ff069d0, type: 2}
+  - id: chaleco_02
+    displayName: 
+    material: {fileID: 2100000, guid: f991cea0bea3f1b4caa11d22ca67f6d5, type: 2}
+  - id: chaleco_03
+    displayName: 
+    material: {fileID: 2100000, guid: d984c373f7bbf234898ad417fb963654, type: 2}
+  bagSkins:
+  - id: maleta_01
+    displayName: 
+    material: {fileID: 2100000, guid: 8245ac975c6733646a150eda7ff069d0, type: 2}
+  - id: maleta_02
+    displayName: 
+    material: {fileID: 2100000, guid: f991cea0bea3f1b4caa11d22ca67f6d5, type: 2}
+  - id: maleta_03
+    displayName: 
+    material: {fileID: 2100000, guid: d984c373f7bbf234898ad417fb963654, type: 2}

@@ -318,6 +318,16 @@ public class PlayerMovementManager : NetworkBehaviour
     {
         if (!IsOwner) return;
 
+        // En el lobby no se procesa movimiento ni gravedad del jugador
+        if (UnityEngine.SceneManagement.SceneManager.GetActiveScene().name == lobbySceneName)
+        {
+            if (characterController != null && characterController.enabled)
+            {
+                characterController.enabled = false;
+            }
+            return;
+        }
+
         // Lazy resolve por si la cámara se instanció después
         if (cameraTransform == null)
             ResolveCameraTransform();

@@ -60,12 +60,18 @@ public class CharacterCustomizationUIHandler : MonoBehaviour
         SaveAndApplyHat();
     }
 
+    /// <summary>
+    /// Selecciona la skin de gorra directamente por índice de lista (ej: 0 para gorra1, 1 para gorra2, 2 para gorra3).
+    /// Asignar a OnClick del botón en Unity Inspector.
+    /// </summary>
     public void SetHatSkin(int index)
     {
         if (skinDatabase == null || skinDatabase.HatSkins.Count == 0) return;
         currentHatIndex = Mathf.Clamp(index, 0, skinDatabase.HatSkins.Count - 1);
         SaveAndApplyHat();
     }
+
+    public void SelectHatSkin(int index) => SetHatSkin(index);
 
     private void SaveAndApplyHat()
     {
@@ -91,12 +97,18 @@ public class CharacterCustomizationUIHandler : MonoBehaviour
         SaveAndApplyBody();
     }
 
+    /// <summary>
+    /// Selecciona la skin de chaleco directamente por índice de lista (ej: 0 para chaleco1, 1 para chaleco2, 2 para chaleco3).
+    /// Asignar a OnClick del botón en Unity Inspector.
+    /// </summary>
     public void SetBodySkin(int index)
     {
         if (skinDatabase == null || skinDatabase.BodySkins.Count == 0) return;
         currentBodyIndex = Mathf.Clamp(index, 0, skinDatabase.BodySkins.Count - 1);
         SaveAndApplyBody();
     }
+
+    public void SelectBodySkin(int index) => SetBodySkin(index);
 
     private void SaveAndApplyBody()
     {
@@ -122,12 +134,18 @@ public class CharacterCustomizationUIHandler : MonoBehaviour
         SaveAndApplyBag();
     }
 
+    /// <summary>
+    /// Selecciona la skin de maleta directamente por índice de lista (ej: 0 para maleta1, 1 para maleta2, 2 para maleta3).
+    /// Asignar a OnClick del botón en Unity Inspector.
+    /// </summary>
     public void SetBagSkin(int index)
     {
         if (skinDatabase == null || skinDatabase.BagSkins.Count == 0) return;
         currentBagIndex = Mathf.Clamp(index, 0, skinDatabase.BagSkins.Count - 1);
         SaveAndApplyBag();
     }
+
+    public void SelectBagSkin(int index) => SetBagSkin(index);
 
     private void SaveAndApplyBag()
     {

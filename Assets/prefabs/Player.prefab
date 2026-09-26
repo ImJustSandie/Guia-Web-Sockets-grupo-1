@@ -613,6 +613,8 @@ MonoBehaviour:
   lobbySlotsObjectName: LobbySlots
   lobbySceneName: Lobby
   fallbackSlotOffset: 2
+  lobbyScale: {x: 20, y: 20, z: 20}
+  restoreOriginalScaleOnExit: 1
 --- !u!143 &8444772134445848065
 CharacterController:
   m_ObjectHideFlags: 0
